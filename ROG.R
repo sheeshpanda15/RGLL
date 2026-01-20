@@ -88,7 +88,7 @@ generate_groups <- function(R, m, N,V) {
   return(result)
 }
 
-mbky <- function(setseed, FXX, y, n, Cn) {
+mbky_ss <- function(setseed, FXX, y, n, Cn) {
   set.seed(setseed)
   
   repeat {
@@ -133,8 +133,38 @@ mbky <- function(setseed, FXX, y, n, Cn) {
               sorted_indices = sorted_indices))
 }
 
-
-
+mbky <- function(setseed, FXX, y, Cn) {
+  set.seed(setseed)
+  
+    mini_batch_kmeans <- ClusterR::MiniBatchKmeans(FXX, clusters = Cn, batch_size = 500, 
+                                                   num_init = 3, max_iters = 5, 
+                                                   initializer = 'kmeans++')
+    
+    # 2. 【关键修改】直接使用 C++ 接口预测簇，替代了原来的 assign_clusters 循环
+    # 这一步是秒出的，不会卡顿
+    batchs <- ClusterR::predict_KMeans(FXX, mini_batch_kmeans$centroids)
+    
+   
+  
+    cluster_sizes <- table(batchs)
+  R_CGOSS <- length(cluster_sizes)
+  sort_idx <- order(batchs)
+  
+  # 利用索引直接重排矩阵和向量，速度更快，内存更省
+  data_matrix_sorted <- FXX[sort_idx, , drop = FALSE]
+  sorted_y <- y[sort_idx]
+  sorted_indices <- (1:nrow(FXX))[sort_idx]
+  
+  # 重新计算排序后的 cluster sizes (其实和上面 table(batchs) 是一样的，但这保证顺序对应)
+  # 注意：table 默认按因子水平排序，这里为了保险起见，按出现的顺序或数值统计
+  cluster_sizes_vector <- as.vector(table(batchs[sort_idx]))
+  
+  return(list(R_CGOSS = R_CGOSS, 
+              data_matrix_sorted = data_matrix_sorted, 
+              sorted_y = sorted_y, 
+              cluster_sizes_vector = cluster_sizes_vector, 
+              sorted_indices = sorted_indices))
+}
 
 findsubforCGOSS<-function(n,R){
   if (n %% R != 0) {
@@ -182,22 +212,14 @@ MSPE_LM<-function(xx,yy,beta){
 Comp=function(N_all,p, R, Var.e, nloop, n, dist_x="case1", dist_a="N.ori",groupsize,setted_cluster=1,obj.c=0.5){
   big_column_vector<-c()
   beta=rep(1, p)
-  m=ceiling(n / R)
   sigma=diag(0.5,p,p)+matrix(0.5,p,p)
   #sigma=diag(1,p,p)
   lrs=length(N_all)
-  names=c("CGOSS.bt.mat",  "IBOSS.bt.mat","ALL.bt.mat","GALL.bt.mat", "OSS.bt.mat", 
-          "knowGOSS.bt.mat", "GOSS.bt.mat","GIBOSS.bt.mat","knowGIBOSS.bt.mat",
-          "CGOSS.pred",  "IBOSS.pred","ALL.pred","GALL.pred", "OSS.pred", 
-          "knowGOSS.pred", "GOSS.pred","GIBOSS.pred","knowGIBOSS.pred",
-          "CGOSS.bt0.dif","IBOSS.bt0.dif","ALL.bt0.dif","GALL.bt0.dif","OSS.bt0.dif",
-          "knowGOSS.bt0.dif","GOSS.bt0.dif","GIBOSS.bt0.dif","knowGIBOSS.bt0.dif",
-          "CGOSS.Var.a","IBOSS.Var.a","ALL.Var.a","GALL.Var.a","OSS.Var.a",
-          "knowGOSS.Var.a","GOSS.Var.a","GIBOSS.Var.a","knowGIBOSS.Var.a",
-          "CGOSS.Var.e","IBOSS.Var.e","ALL.Var.e","GALL.Var.e","OSS.Var.e",
-          "knowGOSS.Var.e","GOSS.Var.e","GIBOSS.Var.e","knowGIBOSS.Var.e")
-  mat_names=c("CGOSS.bt",  "IBOSS.bt", "ALL.bt", "GALL.bt", "OSS.bt", 
-              "knowGOSS.bt", "GOSS.bt","GIBOSS.bt","knowGIBOSS.bt")
+  names=c("ALL.bt.mat","GALL.bt.mat", 
+          "ALL.pred","GALL.pred", 
+          "ALL.bt0.dif","GALL.bt0.dif"
+          )
+  mat_names=c( "ALL.bt", "GALL.bt")
   for(name in names) {
     assign(name, matrix(NA, 1, nloop*lrs), envir = .GlobalEnv)
   }
@@ -207,16 +229,13 @@ Comp=function(N_all,p, R, Var.e, nloop, n, dist_x="case1", dist_a="N.ori",groups
   
   itr = 0
   
-  
+
   #######
   for (j in 1:lrs) {
-    D.CGOSS=0
-    A.CGOSS=0
-    A.OSS=0
     time.CGOSS=0
     meanR=0
     for (k in 1:nloop) {
-      
+      m<-N/(10*R)
       N<-N_all[j]
       random_numbers <- generate_groups(R,m,N,groupsize)
       C <- round(random_numbers)
@@ -247,8 +266,6 @@ Comp=function(N_all,p, R, Var.e, nloop, n, dist_x="case1", dist_a="N.ori",groups
         if(dist_x=="case2") {FXX[(SC[i] + 1):(SC[i+1]),]=mvrnorm(C[i], rep(0, p), sigma)}
         if(dist_x=="case3") {FXX[(SC[i] + 1):(SC[i+1]),]=matrix(runif(C[i]*p, -1.55+i/20, 0.45+i/20),C[i],p)}
         if(dist_x=="case4") {FXX[(SC[i] + 1):(SC[i+1]),]=mvrnorm(C[i], rep(-2+(i-1)/5, p), sigma) }
-        index.knowGOSS <- c(index.knowGOSS, OAJ2_cpp(apply(FXX[(SC[i] + 1):(SC[i+1]),],2,scalex),m, tPow=2) + SC[i])
-        index.knowGIBOSS <- c(index.knowGIBOSS, iboss(FXX[(SC[i] + 1):(SC[i+1]),],m) + SC[i])
         Fori <- FXX
       }
       
@@ -258,43 +275,27 @@ Comp=function(N_all,p, R, Var.e, nloop, n, dist_x="case1", dist_a="N.ori",groups
       shuffled_df <- FXX[shuffled_indices, ]
       rownames(shuffled_df) <- rownames(FXX)[shuffled_indices]
       FXX <- shuffled_df
-      
       CC=rep(N/R,R)
       SSC = c(0, cumsum(CC))
-      for(i in 1:R){
-        
-        
-        
-        index.GOSS <- c(index.GOSS, OAJ2_cpp(apply(FXX[(SSC[i] + 1):(SSC[i+1]),],2,scalex),m, tPow=2) + SSC[i])
-        
-        index.GIBOSS <- c(index.GIBOSS, iboss(FXX[(SSC[i] + 1):(SSC[i+1]),],m) + SSC[i])
-      }
-      
-      
+
       
       
       
       FY <- 1 + FXX%*%beta + Fa + Fe
-      nc <- rep(m,R)
+     
       
       
-      ########################################## OSS
-      nc2 <- c()
-      index.OSS <- sort(OAJ2_cpp(apply(FXX,2,scalex),n, tPow=2))
-      for (i in 1:R) {
-        nc.OSS <- which(index.OSS >= (SSC[i] + 1) & index.OSS <= (SSC[i+1]))
-        nc2[i] <- length(nc.OSS)
-      }
+
       
       
-      #########################CGOSS###########################################################################
+      ####################################################################################################
       
       T.initial<-5000
       Cn=1
       time2.start<-Sys.time()
       ################### 标准 SA 初始化 (必须在循环外) ###################
       # 1. 计算初始状态 (Current State)
-      cluster.curr <- mbky(setseed, FXX, FY, n, Cn)
+      cluster.curr <- mbky(setseed, FXX, FY, Cn)
       R_CGOSS.curr <- cluster.curr$R_CGOSS
       FXXXX.curr   <- cluster.curr$data_matrix_sorted
       FYYY.curr    <- cluster.curr$sorted_y
@@ -314,36 +315,25 @@ Comp=function(N_all,p, R, Var.e, nloop, n, dist_x="case1", dist_a="N.ori",groups
       Cn.best  <- Cn
       
       # 3. SA 参数设置
-      T.curr <- T.initial       # 初始温度
-      alpha  <- 0.95            # 降温系数 (通常 0.8 ~ 0.99)
+      T.curr <- T.initial       
+      alpha  <- 0.95            
       iter   <- 0
-      max_iter <- 100           # 防止死循环的最大迭代次数
+      max_iter <- 100           
       
       ################### SA 主循环 ###################
       repeat {
         iter <- iter + 1
-        
-        # 停止条件：温度过低 或 达到最大迭代次数
         if (T.curr < 1e-4 || iter > max_iter) break 
         
-        # -------------------------------------------------------
-        # A. 生成邻域新解 (Generate Neighbor)
-        # -------------------------------------------------------
-        # 在标准 SA 中，我们需要扰动 Cn。可以随机 +1, -1，或者你只想单纯增加寻找
-        # 这里为了演示完整性，使用随机扰动 (Random Walk)
-        step <- sample(c(-1, 1), 1) 
+        step <- sample(c(0, 1), 1) 
         Cn.candi <- Cn + step
         
-        # 边界检查：防止 Cn 小于 1
         if (Cn.candi < 1) Cn.candi <- 1
-        if (Cn.candi == Cn) { # 如果没变(比如触底)，强制变一下
-          Cn.candi <- Cn + 1 
+        if (Cn.candi == Cn) { 
+          Cn.candi <- Cn + 2 
         }
         
-        # -------------------------------------------------------
-        # B. 计算新解的目标函数 (Evaluate Candidate)
-        # -------------------------------------------------------
-        cluster.candi <- mbky(setseed, FXX, FY, n, Cn.candi)
+        cluster.candi <- mbky(setseed, FXX, FY, Cn.candi)
         
         R.candi <- cluster.candi$R_CGOSS
         F.candi <- cluster.candi$data_matrix_sorted
@@ -355,38 +345,28 @@ Comp=function(N_all,p, R, Var.e, nloop, n, dist_x="case1", dist_a="N.ori",groups
         
         obj.candi <- (obj.c/p)*log(D.candi) - (1-obj.c)*(log(A.candi/p))
         
-        # -------------------------------------------------------
-        # C. 接受准则 (Metropolis Criterion)
-        # -------------------------------------------------------
-        # 计算能量差 (我们这里是最大化 obj，所以 delta = new - curr)
         delta <- obj.candi - obj.curr
         
         accept <- FALSE
         
         if (delta > 0) {
-          # 1. 新解更好 -> 100% 接受
           accept <- TRUE
         } else {
-          # 2. 新解更差 -> 以概率 exp(delta/T) 接受
           prob <- exp(delta / T.curr)
           if (runif(1) < prob) {
             accept <- TRUE
           }
         }
         
-        # -------------------------------------------------------
-        # D. 更新状态 (Update State)
-        # -------------------------------------------------------
+
         if (accept) {
-          # 更新当前状态为新状态
           Cn <- Cn.candi
           obj.curr <- obj.candi
-          FXXXX.curr <- F.candi # 虽然后面不用，但保持状态同步是个好习惯
+          FXXXX.curr <- F.candi
           
-          # 【关键】检查是否打破了历史最优记录
+
           if (obj.candi > obj.best) {
             obj.best <- obj.candi
-            # 保存所有需要的最优结果
             FXX.best <- F.candi
             FY.bestM <- Y.candi
             C.best   <- C.candi
@@ -401,10 +381,9 @@ Comp=function(N_all,p, R, Var.e, nloop, n, dist_x="case1", dist_a="N.ori",groups
         T.curr <- T.curr * alpha
         
         # 可选：打印进度
-        # cat(sprintf("Iter: %d, T: %.4f, Cn: %d, Obj: %.4f, Best: %.4f\n", iter, T.curr, Cn, obj.curr, obj.best))
+         cat(sprintf("Iter: %d, T: %.4f, Cn: %d, Obj: %.4f, Best: %.4f\n", iter, T.curr, Cn, obj.curr, obj.best))
       }
       
-      # 循环结束后，FXX.best, Cn.best 等即为 SA 找到的全局最优解
       
       meanR <- meanR + R.best
       time2.end<-Sys.time()
@@ -420,10 +399,9 @@ Comp=function(N_all,p, R, Var.e, nloop, n, dist_x="case1", dist_a="N.ori",groups
       
       GALL.Est <- Est_hat_cpp(xx=FXX.best, yy=FY.bestM, 
                               beta, Var.a, Var.e, C.best, R.best, p)
-      GALL.pred[,itr]<- 0
+      GALL.pred[,itr] <- MSPE_fn(FYori, Fori, FXX.best, FY.bestM, 
+                                 GALL.Est[[5]], GALL.Est[[6]], GALL.Est[[7]], C.best,C.best, R.best)
       GALL.bt.mat[,itr] <- GALL.Est[[1]]
-      GALL.Var.a[,itr]<- GALL.Est[[2]]
-      GALL.Var.e[,itr]<- GALL.Est[[3]]
       GALL.bt0.dif[,itr] <- GALL.Est[[4]]
       GALL.bt[,itr] <- GALL.Est[[5]]
       
@@ -433,12 +411,10 @@ Comp=function(N_all,p, R, Var.e, nloop, n, dist_x="case1", dist_a="N.ori",groups
       
       ALL.Est <- Est_hat_cpp(xx=Fori, yy=FYori, 
                              beta, Var.a, Var.e, C, R, p)
-      #ALL.pred[,itr] <- MSPE_fn(FX.est, Fori, FXX[index.GOSS,], FY[index.GOSS,], 
-      #                         ALL.Est[[5]], ALL.Est[[6]], ALL.Est[[7]], nc,C, R)
+      ALL.pred[,itr] <- MSPE_fn(FYori, Fori, Fori, FYori, 
+                               ALL.Est[[5]], ALL.Est[[6]], ALL.Est[[7]], C,C, R)
       ALL.pred[,itr]<- 0
       ALL.bt.mat[,itr] <- ALL.Est[[1]]
-      ALL.Var.a[,itr]<- ALL.Est[[2]]
-      ALL.Var.e[,itr]<- ALL.Est[[3]]
       ALL.bt0.dif[,itr] <- ALL.Est[[4]]
       ALL.bt[,itr] <- ALL.Est[[5]]
       
@@ -482,12 +458,12 @@ Comp=function(N_all,p, R, Var.e, nloop, n, dist_x="case1", dist_a="N.ori",groups
   for (i in 1:lrs) {
     loc <- ((i-1)*nloop+1):(i*nloop)
     
-    mspe.ALL <- c(mse.ALL, mean(ALL.pred[,itr]))
-    mspe.GALL <- c(mse.GALL, mean(GALL.pred[,itr]))
+    mspe.ALL <- c(mspe.ALL, mean(ALL.pred[,itr]))
+    mspe.GALL <- c(mspe.GALL, mean(GALL.pred[,itr]))
     
   }
   
-  rec2 <- cbind(mspe.GALL,mspe.ALL)
+  rec2 <- cbind(mspe.ALL,mspe.GALL)
   
   ################################################
   mse.bt0.ALL <- mse.bt0.GALL <- c()
@@ -511,9 +487,9 @@ Comp=function(N_all,p, R, Var.e, nloop, n, dist_x="case1", dist_a="N.ori",groups
 
 
 
-N=c(1000)
-modeltype="N.ori"
-result = Comp(N,p=50,R=20,Var.e=9,nloop=20,n=100,dist_x =filename, dist_a=modeltype,groupsize="large",setted_cluster=20,obj.c=0.5)
+N=c(1e4)
+modeltype="N.ML"
+result = Comp(N,p=50,R=20,Var.e=9,nloop=20,n=100,dist_x =filename, dist_a=modeltype,groupsize="large",setted_cluster=20,obj.c=0.1)
 result
 
 
