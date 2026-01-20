@@ -93,7 +93,7 @@ mbky <- function(setseed, FXX, y, n, Cn) {
   
   repeat {
     # 1. 运行 Mini-Batch K-means
-    mini_batch_kmeans <- ClusterR::MiniBatchKmeans(FXX, clusters = Cn, batch_size = 4096, 
+    mini_batch_kmeans <- ClusterR::MiniBatchKmeans(FXX, clusters = Cn, batch_size = 500, 
                                                    num_init = 3, max_iters = 5, 
                                                    initializer = 'kmeans++')
     
@@ -289,134 +289,137 @@ Comp=function(N_all,p, R, Var.e, nloop, n, dist_x="case1", dist_a="N.ori",groups
       
       #########################CGOSS###########################################################################
       
-      T.initial<-R
+      T.initial<-5000
+      Cn=1
       time2.start<-Sys.time()
+      ################### 标准 SA 初始化 (必须在循环外) ###################
+      # 1. 计算初始状态 (Current State)
+      cluster.curr <- mbky(setseed, FXX, FY, n, Cn)
+      R_CGOSS.curr <- cluster.curr$R_CGOSS
+      FXXXX.curr   <- cluster.curr$data_matrix_sorted
+      FYYY.curr    <- cluster.curr$sorted_y
+      C.curr       <- cluster.curr$cluster_sizes_vector
+      
+      # 计算初始目标函数值
+      D.curr <- count_info_cpp(FXXXX.curr, FYYY.curr, C.curr, R_CGOSS.curr, p)[1]
+      A.curr <- count_info_cpp(FXXXX.curr, FYYY.curr, C.curr, R_CGOSS.curr, p)[2]
+      obj.curr <- (obj.c/p)*log(D.curr) - (1-obj.c)*(log(A.curr/p))
+      
+      # 2. 初始化全局最优记录 (Global Best)
+      obj.best <- obj.curr
+      FXX.best <- FXXXX.curr
+      FY.bestM <- FYYY.curr
+      C.best   <- C.curr
+      R.best   <- R_CGOSS.curr
+      Cn.best  <- Cn
+      
+      # 3. SA 参数设置
+      T.curr <- T.initial       # 初始温度
+      alpha  <- 0.95            # 降温系数 (通常 0.8 ~ 0.99)
+      iter   <- 0
+      max_iter <- 100           # 防止死循环的最大迭代次数
+      
+      ################### SA 主循环 ###################
       repeat {
-        Cn=1
-        cluster= mbky(setseed,FXX,FY,n,Cn)
-        R_CGOSS= cluster$R_CGOSS
-        FXXXX <- cluster$data_matrix_sorted
-        FYYY  <- as.matrix(cluster$sorted_y)
-        C = cluster$cluster_sizes_vector
+        iter <- iter + 1
         
-        D = count_info_cpp(FXXXX,FYYY,C,R_CGOSS,p)[1]
-        A = count_info_cpp(FXXXX,FYYY,C,R_CGOSS,p)[2]
+        # 停止条件：温度过低 或 达到最大迭代次数
+        if (T.curr < 1e-4 || iter > max_iter) break 
         
-        obj.best<- obj.candi <- (obj.c/p)*log(D) - (1-obj.c)*(log(A/p))
+        # -------------------------------------------------------
+        # A. 生成邻域新解 (Generate Neighbor)
+        # -------------------------------------------------------
+        # 在标准 SA 中，我们需要扰动 Cn。可以随机 +1, -1，或者你只想单纯增加寻找
+        # 这里为了演示完整性，使用随机扰动 (Random Walk)
+        step <- sample(c(-1, 1), 1) 
+        Cn.candi <- Cn + step
         
-        
-        if (obj.candi >= obj.best) {
-            obj.best  <- obj.candi
-            obj.before<- obj.candi
-            Cn <- Cn + 3
-            next
+        # 边界检查：防止 Cn 小于 1
+        if (Cn.candi < 1) Cn.candi <- 1
+        if (Cn.candi == Cn) { # 如果没变(比如触底)，强制变一下
+          Cn.candi <- Cn + 1 
         }
-        alpha <- if (obj.before == obj.candi) 0.8 else if (Cn == informat$R) 0.95 else 0.85
-        T.cool <- T.initial * alpha ^ Cn
-        heatprob <- exp(-(obj.best - obj.candi)/T.cool)
-        if (runif(1, min = 0.1, max = 0.9) < heatprob) {
-          Cn <- Cn + 3
-          obj.before <- obj.candi
-          next
+        
+        # -------------------------------------------------------
+        # B. 计算新解的目标函数 (Evaluate Candidate)
+        # -------------------------------------------------------
+        cluster.candi <- mbky(setseed, FXX, FY, n, Cn.candi)
+        
+        R.candi <- cluster.candi$R_CGOSS
+        F.candi <- cluster.candi$data_matrix_sorted
+        Y.candi <- cluster.candi$sorted_y
+        C.candi <- cluster.candi$cluster_sizes_vector
+        
+        D.candi <- count_info_cpp(F.candi, Y.candi, C.candi, R.candi, p)[1]
+        A.candi <- count_info_cpp(F.candi, Y.candi, C.candi, R.candi, p)[2]
+        
+        obj.candi <- (obj.c/p)*log(D.candi) - (1-obj.c)*(log(A.candi/p))
+        
+        # -------------------------------------------------------
+        # C. 接受准则 (Metropolis Criterion)
+        # -------------------------------------------------------
+        # 计算能量差 (我们这里是最大化 obj，所以 delta = new - curr)
+        delta <- obj.candi - obj.curr
+        
+        accept <- FALSE
+        
+        if (delta > 0) {
+          # 1. 新解更好 -> 100% 接受
+          accept <- TRUE
         } else {
-          break
+          # 2. 新解更差 -> 以概率 exp(delta/T) 接受
+          prob <- exp(delta / T.curr)
+          if (runif(1) < prob) {
+            accept <- TRUE
+          }
         }
+        
+        # -------------------------------------------------------
+        # D. 更新状态 (Update State)
+        # -------------------------------------------------------
+        if (accept) {
+          # 更新当前状态为新状态
+          Cn <- Cn.candi
+          obj.curr <- obj.candi
+          FXXXX.curr <- F.candi # 虽然后面不用，但保持状态同步是个好习惯
+          
+          # 【关键】检查是否打破了历史最优记录
+          if (obj.candi > obj.best) {
+            obj.best <- obj.candi
+            # 保存所有需要的最优结果
+            FXX.best <- F.candi
+            FY.bestM <- Y.candi
+            C.best   <- C.candi
+            R.best   <- R.candi
+            Cn.best  <- Cn.candi
+          }
+        }
+        
+        # -------------------------------------------------------
+        # E. 降温 (Cooling)
+        # -------------------------------------------------------
+        T.curr <- T.curr * alpha
+        
+        # 可选：打印进度
+        # cat(sprintf("Iter: %d, T: %.4f, Cn: %d, Obj: %.4f, Best: %.4f\n", iter, T.curr, Cn, obj.curr, obj.best))
       }
       
-      meanR <- meanR + R_CGOSS
+      # 循环结束后，FXX.best, Cn.best 等即为 SA 找到的全局最优解
+      
+      meanR <- meanR + R.best
       time2.end<-Sys.time()
       time.CGOSS<-time.CGOSS+as.numeric(difftime(time2.end, time2.start, units = "secs"))
       
       print(time.CGOSS)
       
-      ############################################## IBOSS
-      nc3 <- c()
-      index.IBOSS <- sort(iboss(FXX,n))
-      for (i in 1:R) {
-        nc.IBOSS <- which(index.IBOSS >= (SC[i] + 1) & index.IBOSS <= (SC[i+1]))
-        nc3[i] <- length(nc.IBOSS)
-      }
-      
-      
-      ##########################################################  GOSS
-    
-      GOSS.Est <- Est_hat_cpp(xx=FXX[index.GOSS,], yy=FY[index.GOSS,], 
-                              beta, Var.a, Var.e, nc, R, p)
-      GOSS.pred[,itr] <- MSPE_fn(FYori, Fori, FXX[index.GOSS,], FY[index.GOSS,], 
-                                 GOSS.Est[[5]], GOSS.Est[[6]], GOSS.Est[[7]], nc,C, R)
-      GOSS.bt.mat[,itr] <- GOSS.Est[[1]]
-      GOSS.Var.a[,itr]<- GOSS.Est[[2]]
-      GOSS.Var.e[,itr]<- GOSS.Est[[3]]
-      GOSS.bt0.dif[,itr] <- GOSS.Est[[4]]
-      GOSS.bt[,itr] <- GOSS.Est[[5]]
-      
-      ############################################################# estimate knowGOSS
-      
-      knowGOSS.Est <- Est_hat_cpp(xx=Fori[index.knowGOSS,], yy=FYori[index.knowGOSS,], 
-                                  beta, Var.a, Var.e, nc, R, p)
-      knowGOSS.pred[,itr] <- MSPE_fn(FYori, Fori, Fori[index.knowGOSS,], FYori[index.knowGOSS,], 
-                                     knowGOSS.Est[[5]], knowGOSS.Est[[6]], knowGOSS.Est[[7]], nc,C, R)
-      knowGOSS.bt.mat[,itr] <- knowGOSS.Est[[1]]
-      knowGOSS.Var.a[,itr]<- knowGOSS.Est[[2]]
-      knowGOSS.Var.e[,itr]<- knowGOSS.Est[[3]]
-      knowGOSS.bt0.dif[,itr] <- knowGOSS.Est[[4]]
-      knowGOSS.bt[,itr] <- knowGOSS.Est[[5]]
-      
-      ############################################################# estimate GIBOSS
-      
-      GIBOSS.Est <- Est_hat_cpp(xx=FXX[index.GIBOSS,], yy=FY[index.GIBOSS,], 
-                                beta, Var.a, Var.e, nc, R, p)
-      
-      
-      
-      GIBOSS.pred[,itr] <- MSPE_fn(FYori, Fori, FXX[index.GIBOSS,], FY[index.GIBOSS,], 
-                                   GIBOSS.Est[[5]], GIBOSS.Est[[6]], GIBOSS.Est[[7]], nc,C, R)
-      GIBOSS.bt.mat[,itr] <- GIBOSS.Est[[1]]
-      GIBOSS.Var.a[,itr]<- GIBOSS.Est[[2]]
-      GIBOSS.Var.e[,itr]<- GIBOSS.Est[[3]]
-      GIBOSS.bt0.dif[,itr] <- GIBOSS.Est[[4]]
-      GIBOSS.bt[,itr] <- GIBOSS.Est[[5]]
-      
-      ############################################################# estimate knowGIBOSS
-      
-      
-      
-      knowGIBOSS.Est <- Est_hat_cpp(xx=Fori[index.knowGIBOSS,], yy=FYori[index.knowGIBOSS,], 
-                                    beta, Var.a, Var.e, nc, R, p)
-      
-      
-      
-      knowGIBOSS.pred[,itr] <- MSPE_fn(FYori, Fori, Fori[index.knowGIBOSS,], FYori[index.knowGIBOSS,], 
-                                       knowGIBOSS.Est[[5]], knowGIBOSS.Est[[6]], knowGIBOSS.Est[[7]], nc,C, R)
-      knowGIBOSS.bt.mat[,itr] <- knowGIBOSS.Est[[1]]
-      knowGIBOSS.Var.a[,itr]<- knowGIBOSS.Est[[2]]
-      knowGIBOSS.Var.e[,itr]<- knowGIBOSS.Est[[3]]
-      knowGIBOSS.bt0.dif[,itr] <- knowGIBOSS.Est[[4]]
-      knowGIBOSS.bt[,itr] <- knowGIBOSS.Est[[5]]
-      
-      
-      
-      ############################################################# estimate CGOSS
-      print(length(FY.est))
-      print(length(final_index_CGOSS))
-      CGOSS.Est <- Est_hat_cpp(xx=FX.est[final_index_CGOSS,], yy=FY.est[final_index_CGOSS,], 
-                               beta, Var.a, Var.e, ncCGOSS, R_CGOSS, p)
-      CGOSS.pred[,itr]  <- MSPE_fn(FY.est, FX.est , FXX[final_index_CGOSS,], FY[final_index_CGOSS,], 
-                                   CGOSS.Est[[5]], CGOSS.Est[[6]], CGOSS.Est[[7]], ncCGOSS,C.est, R_CGOSS)
-      CGOSS.bt.mat[,itr] <- CGOSS.Est[[1]]
-      CGOSS.Var.a[,itr]<- CGOSS.Est[[2]]
-      CGOSS.Var.e[,itr]<- CGOSS.Est[[3]]
-      CGOSS.bt0.dif[,itr] <- CGOSS.Est[[4]]
-      CGOSS.bt[,itr] <- CGOSS.Est[[5]]
-      
+     
+
       
       
       ##############GALLL##############
       
-      GALL.Est <- Est_hat_cpp(xx=FX.est, yy=FY.est, 
-                              beta, Var.a, Var.e, C.est, R, p)
-      #ALL.pred[,itr] <- MSPE_fn(FX.est, Fori, FXX[index.GOSS,], FY[index.GOSS,], 
-       #                         ALL.Est[[5]], ALL.Est[[6]], ALL.Est[[7]], nc,C, R)
+      GALL.Est <- Est_hat_cpp(xx=FXX.best, yy=FY.bestM, 
+                              beta, Var.a, Var.e, C.best, R.best, p)
       GALL.pred[,itr]<- 0
       GALL.bt.mat[,itr] <- GALL.Est[[1]]
       GALL.Var.a[,itr]<- GALL.Est[[2]]
@@ -443,30 +446,6 @@ Comp=function(N_all,p, R, Var.e, nloop, n, dist_x="case1", dist_a="N.ori",groups
       
       
       
-      ##########################################################  OSS
-      # OSS.Est <- Est_hat_cpp(xx=FXX[index.OSS,], yy=FY[index.OSS,], 
-      #                        beta, Var.a, Var.e, nc2, R, p)
-      # OSS.pred[,itr] <- MSPE_fn(FYori, Fori, FXX[index.OSS,], FY[index.OSS,], 
-      #                           OSS.Est[[5]], OSS.Est[[6]], OSS.Est[[7]], nc2,(N/n)*nc2, R)
-      EST_OSS_LM<-MSE_LM(FXX[index.OSS,],FY[index.OSS,],beta)
-      OSS.pred[,itr]<-OSS_mspe<-MSPE_LM(FXX,FY,EST_OSS_LM[[3]])
-      OSS.bt.mat[,itr] <- EST_OSS_LM[[2]]
-      #OSS.Var.a[,itr]<- OSS.Est[[2]]
-      #OSS.Var.e[,itr]<- OSS.Est[[3]]
-      OSS.bt0.dif[,itr] <- EST_OSS_LM[[1]]
-      OSS.bt[,itr] <- EST_OSS_LM[[3]]
-      ############################################################# estimate IBOSS
-      # IBOSS.Est <- Est_hat_cpp(xx=FXX[index.OSS,], yy=FY[index.OSS,], 
-      #                        beta, Var.a, Var.e, nc2, R, p)
-      # IBOSS.pred[,itr] <- MSPE_fn(FYori, Fori, FXX[index.OSS,], FY[index.OSS,], 
-      #                           OSS.Est[[5]], OSS.Est[[6]], OSS.Est[[7]], nc2,(N/n)*nc2, R)
-      EST_IBOSS_LM<-MSE_LM(FXX[index.IBOSS,],FY[index.IBOSS,],beta)
-      IBOSS.pred[,itr]<-IBOSS_mspe<-MSPE_LM(FXX,FY,EST_IBOSS_LM[[3]])
-      IBOSS.bt.mat[,itr] <- EST_IBOSS_LM[[2]]
-      #OSS.Var.a[,itr]<- OSS.Est[[2]]
-      #OSS.Var.e[,itr]<- OSS.Est[[3]]
-      IBOSS.bt0.dif[,itr] <- EST_IBOSS_LM[[1]]
-      IBOSS.bt[,itr] <- EST_IBOSS_LM[[3]]
       
       
       
@@ -484,129 +463,58 @@ Comp=function(N_all,p, R, Var.e, nloop, n, dist_x="case1", dist_a="N.ori",groups
   
   
   ##########################################################
-  mse.Goss<-mse.ALL<-mse.GALL<- mse.knowGOSS <- mse.CGOSS <- mse.oss <- mse.iboss <-mse.GIBOSS<-mse.knowGIBOSS<- c()
+  mse.ALL<-mse.GALL<-c()
   for (i in 1:lrs) {
     loc <- ((i-1)*nloop+1):(i*nloop)
     
-    mse.knowGOSS <- c(mse.knowGOSS, mean(knowGOSS.bt.mat[,loc]))
     mse.ALL <- c(mse.ALL, mean(ALL.bt.mat[,loc]))
     mse.GALL <- c(mse.GALL, mean(GALL.bt.mat[,loc]))
-    mse.Goss <- c(mse.Goss, mean(GOSS.bt.mat[,loc]))
-    mse.CGOSS <- c(mse.CGOSS, mean(CGOSS.bt.mat[,loc]))
-    mse.iboss <- c(mse.iboss, mean(IBOSS.bt.mat[,loc]))
-    mse.oss <- c(mse.oss, mean(OSS.bt.mat[,loc]))
-    mse.GIBOSS <- c(mse.GIBOSS, mean(GIBOSS.bt.mat[,loc]))
-    mse.knowGIBOSS <- c(mse.knowGIBOSS, mean(knowGIBOSS.bt.mat[,loc]))
+ 
     
   }
   
-  rec1<-cbind(mse.CGOSS,mse.ALL,mse.GALL, mse.iboss, mse.oss, mse.knowGOSS, mse.Goss,mse.GIBOSS,mse.knowGIBOSS)
+  rec1<-cbind(mse.ALL,mse.GALL)
   
-  ###############################################
-  mse.CGOSS.Var.a <- mse.oss.Var.a <- mse.iboss.Var.a  <- mse.Goss.Var.a <- mse.GIBOSS.Var.a<- mse.knowGIBOSS.Var.a<- mse.knowGOSS.Var.a <-c()
-  for (i in 1:lrs) {
-    loc <- ((i-1)*nloop+1):(i*nloop)
-    mse.CGOSS.Var.a <- c(mse.CGOSS.Var.a, mean(CGOSS.Var.a[,loc]))
-    mse.knowGOSS.Var.a <- c(mse.knowGOSS.Var.a, mean(knowGOSS.Var.a[,loc]))
-    mse.Goss.Var.a <- c(mse.Goss.Var.a, mean(GOSS.Var.a[,loc]))
-    mse.GIBOSS.Var.a <- c(mse.GIBOSS.Var.a, mean(GIBOSS.Var.a[,loc]))
-    mse.knowGIBOSS.Var.a <- c(mse.knowGIBOSS.Var.a, mean(knowGIBOSS.Var.a[,loc]))
-    
-  }
-  
-  rec2<-cbind(mse.CGOSS.Var.a, mse.iboss.Var.a, mse.oss.Var.a, mse.knowGOSS.Var.a, mse.Goss.Var.a,mse.GIBOSS.Var.a,mse.knowGIBOSS.Var.a)
-  
-  ###############################################
-  mse.CGOSS.Var.e <- mse.oss.Var.e <- mse.iboss.Var.e <- mse.Goss.Var.e<- mse.GIBOSS.Var.e<- mse.knowGIBOSS.Var.e <- mse.knowGOSS.Var.e <-c()
-  for (i in 1:lrs) {
-    loc <- ((i-1)*nloop+1):(i*nloop)
-    mse.CGOSS.Var.e <- c(mse.CGOSS.Var.e, mean(CGOSS.Var.e[,loc]))
-    mse.knowGOSS.Var.e <- c(mse.knowGOSS.Var.e, mean(knowGOSS.Var.e[,loc]))
-    mse.Goss.Var.e <- c(mse.Goss.Var.e, mean(GOSS.Var.e[,loc]))
-    mse.GIBOSS.Var.e <- c(mse.GIBOSS.Var.e, mean(GIBOSS.Var.e[,loc]))
-    mse.knowGIBOSS.Var.e <- c(mse.knowGIBOSS.Var.e, mean(knowGIBOSS.Var.e[,loc]))
-    
-  }
-  
-  rec3<-cbind(mse.CGOSS.Var.e, mse.iboss.Var.e, mse.oss.Var.e, mse.knowGOSS.Var.e, mse.Goss.Var.e,mse.GIBOSS.Var.e,mse.knowGIBOSS.Var.e)
-  
+
+
   ##################################################
-  mspe.Goss <- mspe.knowGOSS <- mspe.CGOSS<- mspe.oss<- mspe.GIBOSS<- mspe.knowGIBOSS<- mspe.iboss <- c()
+  mspe.GALL<-  mspe.ALL <- c()
   for (i in 1:lrs) {
     loc <- ((i-1)*nloop+1):(i*nloop)
     
-    mspe.knowGOSS <- c(mspe.knowGOSS, mean(knowGOSS.pred[,loc]))
-    mspe.Goss <- c(mspe.Goss, mean(GOSS.pred[,loc]))
-    mspe.CGOSS <- c(mspe.CGOSS, mean(CGOSS.pred[,loc]))
-    mspe.iboss <- c(mspe.iboss, mean(IBOSS.pred[,loc]))
-    mspe.oss <- c(mspe.oss, mean(OSS.pred[,loc]))
-    mspe.GIBOSS <- c(mspe.GIBOSS, mean(GIBOSS.pred[,loc]))
-    mspe.knowGIBOSS <- c(mspe.knowGIBOSS, mean(knowGIBOSS.pred[,loc]))
+    mspe.ALL <- c(mse.ALL, mean(ALL.pred[,itr]))
+    mspe.GALL <- c(mse.GALL, mean(GALL.pred[,itr]))
     
   }
   
-  rec4 <- cbind(mspe.CGOSS, mspe.iboss, mspe.oss, mspe.knowGOSS, mspe.Goss,mspe.GIBOSS,mspe.knowGIBOSS)
+  rec2 <- cbind(mspe.GALL,mspe.ALL)
   
   ################################################
-  mse.bt0.Goss <- mse.bt0.knowGOSS <- mse.bt0.CGOSS<- mse.bt0.oss<- mse.bt0.GIBOSS<- mse.bt0.knowGIBOSS<- mse.bt0.iboss <- c()
+  mse.bt0.ALL <- mse.bt0.GALL <- c()
   for (i in 1:lrs) {
     loc <- ((i-1)*nloop+1):(i*nloop)
     
+    mse.bt0.ALL <- c(mse.bt0.ALL, mean(ALL.bt0.dif[,itr]))
+    mse.bt0.GALL <- c(mse.bt0.GALL, mean(GALL.bt0.dif[,itr]))
     
-    mse.bt0.knowGOSS <- c(mse.bt0.knowGOSS, mean(knowGOSS.bt0.dif[,loc]))
-    mse.bt0.Goss <- c(mse.bt0.Goss, mean(GOSS.bt0.dif[,loc]))
-    mse.bt0.CGOSS <- c(mse.bt0.CGOSS, mean(CGOSS.bt0.dif[,loc]))
-    mse.bt0.iboss <- c(mse.bt0.iboss, mean(IBOSS.bt0.dif[,loc]))
-    mse.bt0.oss <- c(mse.bt0.oss, mean(OSS.bt0.dif[,loc]))
-    mse.bt0.GIBOSS <- c(mse.bt0.GIBOSS, mean(GIBOSS.bt0.dif[,loc]))
-    mse.bt0.knowGIBOSS <- c(mse.bt0.knowGIBOSS, mean(knowGIBOSS.bt0.dif[,loc]))
     
   }
   
-  rec5 <- cbind(mse.bt0.CGOSS, mse.bt0.iboss, mse.bt0.oss, mse.bt0.knowGOSS, mse.bt0.Goss,mse.bt0.GIBOSS,mse.bt0.knowGIBOSS)
+  rec3 <- cbind(mse.bt0.ALL,mse.bt0.GALL)
   
-  save(rec1, rec2, rec3, rec4, rec5, file = paste0(dist_a,"_", dist_x,".Rdata"))
+  save(rec1, rec2, rec3, file = paste0(dist_a,"_", dist_x,"NEW.Rdata"))
   
-  return(list(rec1,rec2,rec3,rec4,rec5))
+  return(list(rec1,rec2,rec3))
 }
 
 #########################
 
 
 
-N=c(1e4)
+N=c(1000)
 modeltype="N.ori"
-result = Comp(N,p=50,R=20,Var.e=9,nloop=20,n=1e3,dist_x =filename, dist_a=modeltype,groupsize="large",setted_cluster=20,obj.c=0.5)
+result = Comp(N,p=50,R=20,Var.e=9,nloop=20,n=100,dist_x =filename, dist_a=modeltype,groupsize="large",setted_cluster=20,obj.c=0.5)
 result
-
-
-png(paste0(filename,"remake_mse_",modeltype,".png"),width=800,height = 600)
-plot(log10(N), log10(result[[1]][,1]), xlab=expression(log["10"](N)), ylab = expression(log["10"](MSE)), pch=1,lwd=2,
-     ylim=c(min(log10(result[[1]])), max(log10(result[[1]]))),xlim=c(min(log10(N)), max(log10(N))), type="o",main = "")
-pp <- dim(result[[1]])[2]
-for(i in 2:pp){
-  lines(log10(N), log10(result[[1]][,i]), type="o", pch=(i), lty=i, col=i,lwd=2)
-}
-
-legend("topright", lty=1:pp, pch=(1:pp), col=1:pp,
-       legend=c("CGOSS","IBOSS","OSS","known-GOSS","GOSS","GIBOSS","known-GIBOSS"),cex=0.75)
-
-dev.off()
-
-###########################################
-png(paste0(filename,"remake_mspe_",modeltype,".png"),width=800,height = 600)
-plot(log10(N), log10(result[[4]][,1]), xlab=expression(log["10"](N)), ylab = expression(log["10"](MSPE)), pch=1,lwd=2,
-     ylim=c(min(log10(result[[4]])), max(log10(result[[4]]))),xlim=c(min(log10(N)), max(log10(N))), type="o",main = "")
-pp <- dim(result[[4]])[2]
-for(i in 2:pp){
-  lines(log10(N), log10(result[[4]][,i]), type="o", pch=(i), lty=i, col=i,lwd=2)
-}
-
-legend("topright", lty=1:pp, pch=(1:pp), col=1:pp,
-       legend=c("CGOSS","IBOSS","OSS","known-GOSS","GOSS","GIBOSS","known-GIBOSS"),cex=0.75)
-
-
-dev.off()
 
 
 
