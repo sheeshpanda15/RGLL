@@ -44,21 +44,55 @@ iboss=function(x,k){
 scalex=function(a){
   2*(a-min(a))/(max(a)-min(a))-1
 }
-MSPE_fn=function(fy,fx, sx, sy, beta, Var.a, Var.e, nc,C, R){
-  print('开始')
+MSPE_fn = function(fy, fx, sx, sy, beta, Var.a, Var.e, nc, C, R){
+  # nc: 训练集/子样本的组大小
+  # C:  在此逻辑中被忽略 (被 nc 的比例投影替代)
+  
   index <- 1
   mv_hat <- c()
+  
+  # 1. 基于训练结构计算随机效应
   for (i in 1:R) {
-    mv_hat[i] <- (Var.a/(Var.e+nc[i]*Var.a)) * sum((sy - cbind(1, sx)%*%beta)[index:(index + nc[i] - 1)]) 
-    index <- index + nc[i]
+    if(i <= length(nc)){
+      current_indices <- index:(index + nc[i] - 1)
+      if(max(current_indices) <= length(sy)){
+        term1 <- Var.a / (Var.e + nc[i] * Var.a)
+        term2 <- sum((sy - cbind(1, sx) %*% beta)[current_indices])
+        mv_hat[i] <- term1 * term2
+        index <- index + nc[i]
+      } else {
+        mv_hat[i] <- 0
+      }
+    } else {
+      mv_hat[i] <- 0
+    }
   }
   
+  # 2. 比例投影：按比例放大 nc 以适应测试集大小
+  # 我们根据 nc 的比例构造一个新的 C 向量 (C_projected)
   
-  y_hat <- cbind(1, fx)%*%beta + rep(mv_hat, C)
-  print(nrow(y_hat))
-  print(nrow(fy))
+  N_test <- length(fy)          # 测试集的总样本量
+  valid_nc <- nc[1:R]           # 确保我们只取对应于 R 个估计效应的组大小
+  
+  # 计算比例
+  props <- valid_nc / sum(valid_nc)
+  
+  # 将这些比例投影到测试集大小
+  C_projected <- floor(props * N_test)
+  
+  # 3. 修正舍入误差
+  # 由于使用了 floor()，总和可能略小于 N_test。
+  # 我们将余数分配给前几个组，以确保长度完全匹配。
+  remainder <- N_test - sum(C_projected)
+  if(remainder > 0){
+    C_projected[1:remainder] <- C_projected[1:remainder] + 1
+  }
+  
+  # 4. 预测
+  # 现在 sum(C_projected) == length(fy)，所以 rep() 可以完美运行
+  y_hat <- cbind(1, fx)%*%beta + rep(mv_hat, times=C_projected)
+  
   mspe <- mean((fy - y_hat)^2)
-  
   return(mspe)
 }
 generate_groups <- function(R, m, N,V) {
@@ -90,66 +124,20 @@ generate_groups <- function(R, m, N,V) {
   
   return(result)
 }
-
-mbky_ss <- function(setseed, FXX, y, n, Cn) {
-  set.seed(setseed)
-  
-  repeat {
-    # 1. 运行 Mini-Batch K-means
-    mini_batch_kmeans <- ClusterR::MiniBatchKmeans(FXX, clusters = Cn, batch_size = 500, 
-                                                   num_init = 3, max_iters = 5, 
-                                                   initializer = 'kmeans++')
-    
-    # 2. 【关键修改】直接使用 C++ 接口预测簇，替代了原来的 assign_clusters 循环
-    # 这一步是秒出的，不会卡顿
-    batchs <- ClusterR::predict_KMeans(FXX, mini_batch_kmeans$centroids)
-    
-    # 3. 检查簇大小是否满足条件
-    cluster_sizes <- table(batchs)
-    threshold <- n / Cn
-    
-    if (any(cluster_sizes < threshold)) {
-      Cn <- Cn - 1  
-    } else {
-      break  
-    }
-  }
-  
-  R_CGOSS <- length(cluster_sizes)
-  
-  # 4. 【优化排序】直接获取排序索引，避免创建巨大的 data.frame
-  sort_idx <- order(batchs)
-  
-  # 利用索引直接重排矩阵和向量，速度更快，内存更省
-  data_matrix_sorted <- FXX[sort_idx, , drop = FALSE]
-  sorted_y <- y[sort_idx]
-  sorted_indices <- (1:nrow(FXX))[sort_idx]
-  
-  # 重新计算排序后的 cluster sizes (其实和上面 table(batchs) 是一样的，但这保证顺序对应)
-  # 注意：table 默认按因子水平排序，这里为了保险起见，按出现的顺序或数值统计
-  cluster_sizes_vector <- as.vector(table(batchs[sort_idx]))
-  
-  return(list(R_CGOSS = R_CGOSS, 
-              data_matrix_sorted = data_matrix_sorted, 
-              sorted_y = sorted_y, 
-              cluster_sizes_vector = cluster_sizes_vector, 
-              sorted_indices = sorted_indices))
-}
-
 mbky <- function(setseed, FXX, y, Cn) {
   set.seed(setseed)
   
-    mini_batch_kmeans <- ClusterR::MiniBatchKmeans(FXX, clusters = Cn, batch_size = 500, 
-                                                   num_init = 3, max_iters = 5, 
-                                                   initializer = 'kmeans++')
-    
-    # 2. 【关键修改】直接使用 C++ 接口预测簇，替代了原来的 assign_clusters 循环
-    # 这一步是秒出的，不会卡顿
-    batchs <- ClusterR::predict_KMeans(FXX, mini_batch_kmeans$centroids)
-    
-   
+  mini_batch_kmeans <- ClusterR::MiniBatchKmeans(FXX, clusters = Cn, batch_size = 500, 
+                                                 num_init = 3, max_iters = 5, 
+                                                 initializer = 'kmeans++')
   
-    cluster_sizes <- table(batchs)
+  # 2. 【关键修改】直接使用 C++ 接口预测簇，替代了原来的 assign_clusters 循环
+  # 这一步是秒出的，不会卡顿
+  batchs <- ClusterR::predict_KMeans(FXX, mini_batch_kmeans$centroids)
+  
+  
+  
+  cluster_sizes <- table(batchs)
   R_CGOSS <- length(cluster_sizes)
   sort_idx <- order(batchs)
   
@@ -221,7 +209,7 @@ Comp=function(N_all,p, R, Var.e, nloop, n, dist_x="case1", dist_a="N.ori",groups
   names=c("ALL.bt.mat","GALL.bt.mat", 
           "ALL.pred","GALL.pred", 
           "ALL.bt0.dif","GALL.bt0.dif"
-          )
+  )
   mat_names=c( "ALL.bt", "GALL.bt")
   for(name in names) {
     assign(name, matrix(NA, 1, nloop*lrs), envir = .GlobalEnv)
@@ -232,7 +220,7 @@ Comp=function(N_all,p, R, Var.e, nloop, n, dist_x="case1", dist_a="N.ori",groups
   
   itr = 0
   
-
+  
   #######
   for (j in 1:lrs) {
     time.CGOSS=0
@@ -241,21 +229,28 @@ Comp=function(N_all,p, R, Var.e, nloop, n, dist_x="case1", dist_a="N.ori",groups
       m<-N/(10*R)
       N<-N_all[j]
       random_numbers <- generate_groups(R,m,N,groupsize)
-      C <- round(random_numbers)
-      SC.train = c(0, cumsum(C))
-      SC.test
+      C.test <- round(random_numbers)
+      C.train<- 3*C.test
+      SC.test = c(0, cumsum(C.test))
+      SC.train  = c(0, cumsum(C.train))
       
       
       if (k%/%100 == k/100) cat(k, "-")
       itr <- itr+1
       set.seed(k* 100000)
-      if(dist_a == "N.ori") {Var.a = 0.5; Fa = rep(rnorm(R, mean = 0, sd = sqrt(Var.a)), C)}
-      if(dist_a == "N.ML") { Var.a <- 0; Fa <- 0 }
-      if(dist_a == "N.large") {Var.a = 100; Fa = rep(rnorm(R, mean = 0, sd = sqrt(Var.a)), C)}
-      if(dist_a=="T"){Var.a = 3;Fa = rep(rt(R,3), C)}
+      if(dist_a == "N.ori") {Var.a = 0.5; Fa.test = rep(rnorm(R, mean = 0, sd = sqrt(Var.a)), C.test)
+      Var.a = 0.5; Fa.train = rep(rnorm(R, mean = 0, sd = sqrt(Var.a)), C.train)
+      }
+      if(dist_a == "N.ML") { Var.a <- 0; Fa.train<-Fa.test <- 0 }
+      if(dist_a=="T"){Var.a = 3;Fa.test = rep(rt(R,3), C.test)
+      Fa.train = rep(rt(R,3), C.train)}
       
-      Fe = rnorm(max(SC),mean = 0,sd = sqrt(Var.e))
-      FXX = matrix(0, nrow = max(SC), ncol = p)
+      Fe.train = rnorm(max(SC.train),mean = 0,sd = sqrt(Var.e))
+      Fe.test = rnorm(max(SC.test),mean = 0,sd = sqrt(Var.e))
+      FXX.train = matrix(0, nrow = max(SC.train), ncol = p)
+      FXX.test = matrix(0, nrow = max(SC.test), ncol = p)
+      
+      
       index.knowGOSS <-index.CGOSS<- index.GOSS<- index.GIBOSS<- index.knowGIBOSS <- c()
       cpu_time_index_goss<-0
       
@@ -265,15 +260,25 @@ Comp=function(N_all,p, R, Var.e, nloop, n, dist_x="case1", dist_a="N.ori",groups
         
         setseed =  k * 100000 + i * 100
         set.seed(setseed)
-        if(dist_x=="case1") {FXX[(SC[i] + 1):(SC[i+1]),]=matrix(runif(C[i]*p, -1, 1),C[i],p)}
-        if(dist_x=="case2") {FXX[(SC[i] + 1):(SC[i+1]),]=mvrnorm(C[i], rep(0, p), sigma)}
-        if(dist_x=="case3") {FXX[(SC[i] + 1):(SC[i+1]),]=matrix(runif(C[i]*p, -1.55+i/20, 0.45+i/20),C[i],p)}
-        if(dist_x=="case4") {FXX[(SC[i] + 1):(SC[i+1]),]=mvrnorm(C[i], rep(-2+(i-1)/5, p), sigma) }
+        if(dist_x=="case1") {FXX.train[(SC.train[i] + 1):(SC.train[i+1]),]=matrix(runif(C.train[i]*p, -1, 1),C.train[i],p)
+        FXX.test[(SC.test[i] + 1):(SC.test[i+1]),]=matrix(runif(C.test[i]*p, -1, 1),C.test[i],p) }
+        
+        
+        if(dist_x=="case2") {FXX.train[(SC.train[i] + 1):(SC.train[i+1]),]=mvrnorm(C.train[i], rep(0, p), sigma)
+        FXX.test[(SC.test[i] + 1):(SC.test[i+1]),]=mvrnorm(C.test[i], rep(0, p), sigma)}
+        
+        
+        if(dist_x=="case3") {FXX.train[(SC.train[i] + 1):(SC.train[i+1]),]=matrix(runif(C.train[i]*p, -1.55+i/20, 0.45+i/20),C.train[i],p)
+        FXX.test[(SC.test[i] + 1):(SC.test[i+1]),]=matrix(runif(C.test[i]*p, -1.55+i/20, 0.45+i/20),C.test[i],p)}
+        
+        
+        if(dist_x=="case4") {FXX.train[(SC.train[i] + 1):(SC.train[i+1]),]=mvrnorm(C.train[i], rep(-2+(i-1)/5, p), sigma) 
+        FXX.test[(SC.test[i] + 1):(SC.test[i+1]),]=mvrnorm(C.test[i], rep(-2+(i-1)/5, p), sigma)}
         
       }
-
-      FY <- 1 + FXX%*%beta + Fa + Fe
-     
+      
+      FY.test <- 1 + FXX.test%*%beta + Fa.test + Fe.test
+      FY.train <- 1 + FXX.train%*%beta + Fa.train + Fe.train
       
       ####################################################################################################
       
@@ -282,7 +287,7 @@ Comp=function(N_all,p, R, Var.e, nloop, n, dist_x="case1", dist_a="N.ori",groups
       time2.start<-Sys.time()
       ################### 标准 SA 初始化 (必须在循环外) ###################
       # 1. 计算初始状态 (Current State)
-      cluster.curr <- mbky(setseed, Train.FX, Train.FY, Cn)
+      cluster.curr <- mbky(setseed, FXX.train, FY.train, Cn)
       R_CGOSS.curr <- cluster.curr$R_CGOSS
       FXXXX.curr   <- cluster.curr$data_matrix_sorted
       FYYY.curr    <- cluster.curr$sorted_y
@@ -320,7 +325,7 @@ Comp=function(N_all,p, R, Var.e, nloop, n, dist_x="case1", dist_a="N.ori",groups
           Cn.candi <- Cn + 1 
         }
         
-        cluster.candi <- mbky(setseed, FXX, FY, Cn.candi)
+        cluster.candi <- mbky(setseed, FXX.train, FY.train, Cn.candi)
         
         R.candi <- cluster.candi$R_CGOSS
         F.candi <- cluster.candi$data_matrix_sorted
@@ -345,17 +350,17 @@ Comp=function(N_all,p, R, Var.e, nloop, n, dist_x="case1", dist_a="N.ori",groups
           }
         }
         
-
+        
         if (accept) {
           Cn <- Cn.candi
           obj.curr <- obj.candi
           FXXXX.curr <- F.candi
           
-
+          
           if (obj.candi > obj.best) {
             obj.best <- obj.candi
             FXX.best <- F.candi
-            FY.bestM <- Y.candi
+            FY.best  <- Y.candi
             C.best   <- C.candi
             R.best   <- R.candi
             Cn.best  <- Cn.candi
@@ -368,7 +373,7 @@ Comp=function(N_all,p, R, Var.e, nloop, n, dist_x="case1", dist_a="N.ori",groups
         T.curr <- T.curr * alpha
         
         # 可选：打印进度
-         cat(sprintf("Iter: %d, T: %.4f, Cn: %d, Obj: %.4f, Best: %.4f\n", iter, T.curr, Cn, obj.curr, obj.best))
+        cat(sprintf("Iter: %d, T: %.4f, Cn: %d, Obj: %.4f, Best: %.4f\n", iter, T.curr, Cn, obj.curr, obj.best))
       }
       
       
@@ -378,16 +383,21 @@ Comp=function(N_all,p, R, Var.e, nloop, n, dist_x="case1", dist_a="N.ori",groups
       
       print(time.CGOSS)
       
-     
-
+      
+      
       
       
       ##############GALLL##############
       
-      GALL.Est <- Est_hat_cpp(xx=FXX.best, yy=FY.bestM, 
+      GALL.Est <- Est_hat_cpp(xx=FXX.best, yy=FY.best, 
                               beta, Var.a, Var.e, C.best, R.best, p)
-      GALL.pred[,itr] <- MSPE_fn(Test.FY, Test.FX, FXX.best, FY.bestM, 
-                                 GALL.Est[[5]], GALL.Est[[6]], GALL.Est[[7]], C.best,C.best, R.best)
+      
+      # 修改说明：交换了 C.test 和 C.best 的位置
+      # nc 应该是 C.best (子样本组大小), C 应该是 C.test (测试集组大小)
+      GALL.pred[,itr] <- MSPE_fn(FY.test, FXX.test, FXX.best, FY.best, 
+                                 GALL.Est[[5]], GALL.Est[[6]], GALL.Est[[7]], 
+                                 C.best, C.test, R.best)
+      
       GALL.bt.mat[,itr] <- GALL.Est[[1]]
       GALL.bt0.dif[,itr] <- GALL.Est[[4]]
       GALL.bt[,itr] <- GALL.Est[[5]]
@@ -396,11 +406,15 @@ Comp=function(N_all,p, R, Var.e, nloop, n, dist_x="case1", dist_a="N.ori",groups
       
       ##############ALLL##############
       
-      ALL.Est <- Est_hat_cpp(xx=Train.FX, yy=Train.FY, 
-                             beta, Var.a, Var.e, C, R, p)
-      ALL.pred[,itr] <- MSPE_fn(Test.FY, Test.FX, Train.FX, Train.FY, 
-                               ALL.Est[[5]], ALL.Est[[6]], ALL.Est[[7]], C,C, R)
-      ALL.pred[,itr]<- 0
+      # 修改说明：此处原代码使用了未定义的变量 Train.FX 等，已修正为 FXX.train 等
+      # 同时补充了缺失的 C 参数，这里假设全样本训练对应的组大小是 C.train
+      ALL.Est <- Est_hat_cpp(xx=FXX.train, yy=FY.train, 
+                             beta, Var.a, Var.e, C.train, R, p)
+      
+      ALL.pred[,itr] <- MSPE_fn(FY.test, FXX.test, FXX.train, FY.train, 
+                                ALL.Est[[5]], ALL.Est[[6]], ALL.Est[[7]], 
+                                C.train, C.test, R)
+      
       ALL.bt.mat[,itr] <- ALL.Est[[1]]
       ALL.bt0.dif[,itr] <- ALL.Est[[4]]
       ALL.bt[,itr] <- ALL.Est[[5]]
@@ -432,14 +446,14 @@ Comp=function(N_all,p, R, Var.e, nloop, n, dist_x="case1", dist_a="N.ori",groups
     
     mse.ALL <- c(mse.ALL, mean(ALL.bt.mat[,loc]))
     mse.GALL <- c(mse.GALL, mean(GALL.bt.mat[,loc]))
- 
+    
     
   }
   
   rec1<-cbind(mse.ALL,mse.GALL)
   
-
-
+  
+  
   ##################################################
   mspe.GALL<-  mspe.ALL <- c()
   for (i in 1:lrs) {
@@ -474,9 +488,9 @@ Comp=function(N_all,p, R, Var.e, nloop, n, dist_x="case1", dist_a="N.ori",groups
 
 
 
-N=c(1e4)
+N=c(2500)
 modeltype="N.ori"
-result = Comp(N,p=50,R=20,Var.e=9,nloop=20,n=100,dist_x =filename, dist_a=modeltype,groupsize="large",setted_cluster=20,obj.c=0.1)
+result = Comp(N,p=50,R=20,Var.e=9,nloop=1,n=100,dist_x =filename, dist_a=modeltype,groupsize="large",setted_cluster=20,obj.c=0.1)
 result
 
 
