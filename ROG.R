@@ -21,7 +21,7 @@ library(MASS)
 Rcpp::sourceCpp('myoss.cpp')
 Rcpp::sourceCpp("lmm_fast.cpp")
 
-filename<-CASE<-"case4"
+filename<-CASE<-"case1"
 
 iboss=function(x,k){
   ind=NULL
@@ -45,6 +45,7 @@ scalex=function(a){
   2*(a-min(a))/(max(a)-min(a))-1
 }
 MSPE_fn=function(fy,fx, sx, sy, beta, Var.a, Var.e, nc,C, R){
+  print('开始')
   index <- 1
   mv_hat <- c()
   for (i in 1:R) {
@@ -54,6 +55,8 @@ MSPE_fn=function(fy,fx, sx, sy, beta, Var.a, Var.e, nc,C, R){
   
   
   y_hat <- cbind(1, fx)%*%beta + rep(mv_hat, C)
+  print(nrow(y_hat))
+  print(nrow(fy))
   mspe <- mean((fy - y_hat)^2)
   
   return(mspe)
@@ -239,8 +242,8 @@ Comp=function(N_all,p, R, Var.e, nloop, n, dist_x="case1", dist_a="N.ori",groups
       N<-N_all[j]
       random_numbers <- generate_groups(R,m,N,groupsize)
       C <- round(random_numbers)
-      SC = c(0, cumsum(C))
-      
+      SC.train = c(0, cumsum(C))
+      SC.test
       
       
       if (k%/%100 == k/100) cat(k, "-")
@@ -266,36 +269,20 @@ Comp=function(N_all,p, R, Var.e, nloop, n, dist_x="case1", dist_a="N.ori",groups
         if(dist_x=="case2") {FXX[(SC[i] + 1):(SC[i+1]),]=mvrnorm(C[i], rep(0, p), sigma)}
         if(dist_x=="case3") {FXX[(SC[i] + 1):(SC[i+1]),]=matrix(runif(C[i]*p, -1.55+i/20, 0.45+i/20),C[i],p)}
         if(dist_x=="case4") {FXX[(SC[i] + 1):(SC[i+1]),]=mvrnorm(C[i], rep(-2+(i-1)/5, p), sigma) }
-        Fori <- FXX
+        
       }
-      
-      
-      FYori <- 1 + Fori%*%beta + Fa + Fe
-      shuffled_indices <- sample(nrow(FXX))
-      shuffled_df <- FXX[shuffled_indices, ]
-      rownames(shuffled_df) <- rownames(FXX)[shuffled_indices]
-      FXX <- shuffled_df
-      CC=rep(N/R,R)
-      SSC = c(0, cumsum(CC))
 
-      
-      
-      
       FY <- 1 + FXX%*%beta + Fa + Fe
      
       
-      
-
-      
-      
       ####################################################################################################
       
-      T.initial<-5000
+      T.initial<-50
       Cn=1
       time2.start<-Sys.time()
       ################### 标准 SA 初始化 (必须在循环外) ###################
       # 1. 计算初始状态 (Current State)
-      cluster.curr <- mbky(setseed, FXX, FY, Cn)
+      cluster.curr <- mbky(setseed, Train.FX, Train.FY, Cn)
       R_CGOSS.curr <- cluster.curr$R_CGOSS
       FXXXX.curr   <- cluster.curr$data_matrix_sorted
       FYYY.curr    <- cluster.curr$sorted_y
@@ -330,7 +317,7 @@ Comp=function(N_all,p, R, Var.e, nloop, n, dist_x="case1", dist_a="N.ori",groups
         
         if (Cn.candi < 1) Cn.candi <- 1
         if (Cn.candi == Cn) { 
-          Cn.candi <- Cn + 2 
+          Cn.candi <- Cn + 1 
         }
         
         cluster.candi <- mbky(setseed, FXX, FY, Cn.candi)
@@ -399,7 +386,7 @@ Comp=function(N_all,p, R, Var.e, nloop, n, dist_x="case1", dist_a="N.ori",groups
       
       GALL.Est <- Est_hat_cpp(xx=FXX.best, yy=FY.bestM, 
                               beta, Var.a, Var.e, C.best, R.best, p)
-      GALL.pred[,itr] <- MSPE_fn(FYori, Fori, FXX.best, FY.bestM, 
+      GALL.pred[,itr] <- MSPE_fn(Test.FY, Test.FX, FXX.best, FY.bestM, 
                                  GALL.Est[[5]], GALL.Est[[6]], GALL.Est[[7]], C.best,C.best, R.best)
       GALL.bt.mat[,itr] <- GALL.Est[[1]]
       GALL.bt0.dif[,itr] <- GALL.Est[[4]]
@@ -409,9 +396,9 @@ Comp=function(N_all,p, R, Var.e, nloop, n, dist_x="case1", dist_a="N.ori",groups
       
       ##############ALLL##############
       
-      ALL.Est <- Est_hat_cpp(xx=Fori, yy=FYori, 
+      ALL.Est <- Est_hat_cpp(xx=Train.FX, yy=Train.FY, 
                              beta, Var.a, Var.e, C, R, p)
-      ALL.pred[,itr] <- MSPE_fn(FYori, Fori, Fori, FYori, 
+      ALL.pred[,itr] <- MSPE_fn(Test.FY, Test.FX, Train.FX, Train.FY, 
                                ALL.Est[[5]], ALL.Est[[6]], ALL.Est[[7]], C,C, R)
       ALL.pred[,itr]<- 0
       ALL.bt.mat[,itr] <- ALL.Est[[1]]
@@ -478,7 +465,7 @@ Comp=function(N_all,p, R, Var.e, nloop, n, dist_x="case1", dist_a="N.ori",groups
   
   rec3 <- cbind(mse.bt0.ALL,mse.bt0.GALL)
   
-  save(rec1, rec2, rec3, file = paste0(dist_a,"_", dist_x,"NEW.Rdata"))
+  #save(rec1, rec2, rec3, file = paste0(dist_a,"_", dist_x,"NEW.Rdata"))
   
   return(list(rec1,rec2,rec3))
 }
@@ -488,7 +475,7 @@ Comp=function(N_all,p, R, Var.e, nloop, n, dist_x="case1", dist_a="N.ori",groups
 
 
 N=c(1e4)
-modeltype="N.ML"
+modeltype="N.ori"
 result = Comp(N,p=50,R=20,Var.e=9,nloop=20,n=100,dist_x =filename, dist_a=modeltype,groupsize="large",setted_cluster=20,obj.c=0.1)
 result
 
