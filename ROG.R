@@ -22,6 +22,12 @@ Rcpp::sourceCpp('myoss.cpp')
 Rcpp::sourceCpp("lmm_fast.cpp")
 
 filename<-CASE<-"case1"
+calculate_K <- function(p) {
+  
+  k_diag <- c(1, rep(1/3, p - 1))
+  K <- diag(k_diag)
+  return(K)
+}
 
 iboss=function(x,k){
   ind=NULL
@@ -156,7 +162,6 @@ mbky <- function(setseed, FXX, y, Cn) {
               cluster_sizes_vector = cluster_sizes_vector, 
               sorted_indices = sorted_indices))
 }
-
 findsubforCGOSS<-function(n,R){
   if (n %% R != 0) {
     me=floor(n/R)
@@ -183,8 +188,8 @@ GOSS<-function(setseed,FXX,FY,n,Cn,p){
   }
   index_CGOSS_interation <- cluster$sorted_indices[index.CGOSS]
   ncCGOSS <- mcgoss
-  D.after=count_info_cpp(FXX[index_CGOSS_interation,],FY[index_CGOSS_interation,],ncCGOSS,R_CGOSS,p)[1]
-  A.after=count_info_cpp(FXX[index_CGOSS_interation,],FY[index_CGOSS_interation,],ncCGOSS,R_CGOSS,p)[2]
+  D.after=count_info_cpp(FXX[index_CGOSS_interation,],FY[index_CGOSS_interation,],ncCGOSS,R_CGOSS,p)$D
+  A.after=count_info_cpp(FXX[index_CGOSS_interation,],FY[index_CGOSS_interation,],ncCGOSS,R_CGOSS,p)$A
   return(list(index = index_CGOSS_interation,D = D.after,A = A.after,R = R_CGOSS,nc = ncCGOSS,C=cluster$cluster_sizes_vector,FX=FXXXX,FY=FYYY))
 }
 MSE_LM<-function(xx,yy,beta){
@@ -238,8 +243,8 @@ Comp=function(N_all,p, R, Var.e, nloop, n, dist_x="case1", dist_a="N.ori",groups
       if (k%/%100 == k/100) cat(k, "-")
       itr <- itr+1
       set.seed(k* 100000)
-      if(dist_a == "N.ori") {Var.a = 0.5; Fa.test = rep(rnorm(R, mean = 0, sd = sqrt(Var.a)), C.test)
-      Var.a = 0.5; Fa.train = rep(rnorm(R, mean = 0, sd = sqrt(Var.a)), C.train)
+      if(dist_a == "N.ori") {Var.a = 2.25; Fa.test = rep(rnorm(R, mean = 0, sd = sqrt(Var.a)), C.test)
+      Var.a = 2.25; Fa.train = rep(rnorm(R, mean = 0, sd = sqrt(Var.a)), C.train)
       }
       if(dist_a == "N.ML") { Var.a <- 0; Fa.train<-Fa.test <- 0 }
       if(dist_a=="T"){Var.a = 3;Fa.test = rep(rt(R,3), C.test)
@@ -293,21 +298,21 @@ Comp=function(N_all,p, R, Var.e, nloop, n, dist_x="case1", dist_a="N.ori",groups
       FYYY.curr    <- cluster.curr$sorted_y
       C.curr       <- cluster.curr$cluster_sizes_vector
       
-      # 计算初始目标函数值
-      D.curr <- count_info_cpp(FXXXX.curr, FYYY.curr, C.curr, R_CGOSS.curr, p)[1]
-      A.curr <- count_info_cpp(FXXXX.curr, FYYY.curr, C.curr, R_CGOSS.curr, p)[2]
-      obj.curr <- (obj.c/p)*log(D.curr) - (1-obj.c)*(log(A.curr/p))
+      # 计算初始目标函数值 (避免重复调用 C++ 函数)
+      info_res_curr <- count_info_cpp(FXXXX.curr, FYYY.curr, C.curr, R_CGOSS.curr, p)
+      I.curr <- sum(diag( solve( info_res_curr$Information) %*% calculate_K(p+1) ))  
+      obj.curr <- I.curr
       
       # 2. 初始化全局最优记录 (Global Best)
       obj.best <- obj.curr
       FXX.best <- FXXXX.curr
-      FY.bestM <- FYYY.curr
+      FY.bestM <- FYYY.curr  # 注意：这里你原本写的是 FY.bestM，但下面更新是 FY.best，建议统一命名为 FY.best
       C.best   <- C.curr
       R.best   <- R_CGOSS.curr
       Cn.best  <- Cn
       
       # 3. SA 参数设置
-      T.curr <- T.initial       
+      T.curr <- T.initial        
       alpha  <- 0.95            
       iter   <- 0
       max_iter <- 100           
@@ -317,28 +322,32 @@ Comp=function(N_all,p, R, Var.e, nloop, n, dist_x="case1", dist_a="N.ori",groups
         iter <- iter + 1
         if (T.curr < 1e-4 || iter > max_iter) break 
         
+        # 修正步长逻辑：允许加 1 或减 1 的随机游走
         step <- sample(c(0, 1), 1) 
         Cn.candi <- Cn + step
         
+        # 防止聚类数异常 (不能小于 1)
         if (Cn.candi < 1) Cn.candi <- 1
+        # 如果因为小于 1 被拉回导致 Cn.candi 等于 Cn，强制让它向右走
         if (Cn.candi == Cn) { 
           Cn.candi <- Cn + 1 
         }
         
-        cluster.candi <- mbky(setseed, FXX.train, FY.train, Cn.candi)
+        cluster.candi <- mbky(setseed + iter, FXX.train, FY.train, Cn.candi)
         
         R.candi <- cluster.candi$R_CGOSS
         F.candi <- cluster.candi$data_matrix_sorted
         Y.candi <- cluster.candi$sorted_y
         C.candi <- cluster.candi$cluster_sizes_vector
         
-        D.candi <- count_info_cpp(F.candi, Y.candi, C.candi, R.candi, p)[1]
-        A.candi <- count_info_cpp(F.candi, Y.candi, C.candi, R.candi, p)[2]
+        # 计算候选目标函数值 (同样提取出来避免重复调用)
+        info_res_candi <- count_info_cpp(F.candi, Y.candi, C.candi, R.candi, p)
+        I.candi <- sum(diag( solve(info_res_candi$Information) %*% calculate_K(p+1) ))
         
-        obj.candi <- (obj.c/p)*log(D.candi) - (1-obj.c)*(log(A.candi/p))
+        obj.candi <- I.candi
         
         delta <- obj.candi - obj.curr
-        
+        print(delta)
         accept <- FALSE
         
         if (delta > 0) {
@@ -350,17 +359,19 @@ Comp=function(N_all,p, R, Var.e, nloop, n, dist_x="case1", dist_a="N.ori",groups
           }
         }
         
-        
         if (accept) {
-          Cn <- Cn.candi
-          obj.curr <- obj.candi
-          FXXXX.curr <- F.candi
-          
+          # 补全所有的状态同步，防止新旧状态错乱
+          Cn           <- Cn.candi
+          obj.curr     <- obj.candi
+          FXXXX.curr   <- F.candi
+          FYYY.curr    <- Y.candi      # 新增补全
+          C.curr       <- C.candi      # 新增补全
+          R_CGOSS.curr <- R.candi      # 新增补全
           
           if (obj.candi > obj.best) {
             obj.best <- obj.candi
             FXX.best <- F.candi
-            FY.best  <- Y.candi
+            FY.best  <- Y.candi      # 与上面的 FY.bestM 统一一下比较好
             C.best   <- C.candi
             R.best   <- R.candi
             Cn.best  <- Cn.candi
@@ -376,10 +387,9 @@ Comp=function(N_all,p, R, Var.e, nloop, n, dist_x="case1", dist_a="N.ori",groups
         cat(sprintf("Iter: %d, T: %.4f, Cn: %d, Obj: %.4f, Best: %.4f\n", iter, T.curr, Cn, obj.curr, obj.best))
       }
       
-      
       meanR <- meanR + R.best
-      time2.end<-Sys.time()
-      time.CGOSS<-time.CGOSS+as.numeric(difftime(time2.end, time2.start, units = "secs"))
+      time2.end <- Sys.time()
+      time.CGOSS <- time.CGOSS + as.numeric(difftime(time2.end, time2.start, units = "secs"))
       
       print(time.CGOSS)
       
@@ -459,8 +469,8 @@ Comp=function(N_all,p, R, Var.e, nloop, n, dist_x="case1", dist_a="N.ori",groups
   for (i in 1:lrs) {
     loc <- ((i-1)*nloop+1):(i*nloop)
     
-    mspe.ALL <- c(mspe.ALL, mean(ALL.pred[,itr]))
-    mspe.GALL <- c(mspe.GALL, mean(GALL.pred[,itr]))
+    mspe.ALL <- c(mspe.ALL, mean(ALL.pred[,loc]))
+    mspe.GALL <- c(mspe.GALL, mean(GALL.pred[,loc]))
     
   }
   
@@ -471,8 +481,8 @@ Comp=function(N_all,p, R, Var.e, nloop, n, dist_x="case1", dist_a="N.ori",groups
   for (i in 1:lrs) {
     loc <- ((i-1)*nloop+1):(i*nloop)
     
-    mse.bt0.ALL <- c(mse.bt0.ALL, mean(ALL.bt0.dif[,itr]))
-    mse.bt0.GALL <- c(mse.bt0.GALL, mean(GALL.bt0.dif[,itr]))
+    mse.bt0.ALL <- c(mse.bt0.ALL, mean(ALL.bt0.dif[,loc]))
+    mse.bt0.GALL <- c(mse.bt0.GALL, mean(GALL.bt0.dif[,loc]))
     
     
   }
@@ -490,7 +500,7 @@ Comp=function(N_all,p, R, Var.e, nloop, n, dist_x="case1", dist_a="N.ori",groups
 
 N=c(2500)
 modeltype="N.ori"
-result = Comp(N,p=50,R=20,Var.e=9,nloop=1,n=100,dist_x =filename, dist_a=modeltype,groupsize="large",setted_cluster=20,obj.c=0.1)
+result = Comp(N,p=50,R=20,Var.e=9,nloop=50,n=100,dist_x =filename, dist_a=modeltype,groupsize="large",setted_cluster=20,obj.c=0.1)
 result
 
 

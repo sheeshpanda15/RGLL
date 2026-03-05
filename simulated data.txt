@@ -1,0 +1,12 @@
+> result
+[[1]]
+       mse.ALL  mse.GALL
+[1,] 0.1840304 0.2360251
+
+[[2]]
+     mspe.ALL mspe.GALL
+[1,] 13.23297  11.46404
+
+[[3]]
+     mse.bt0.ALL mse.bt0.GALL
+[1,]   0.1598213    0.1876444

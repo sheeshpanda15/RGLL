@@ -193,89 +193,110 @@ Rcpp::List Est_hat_cpp(const arma::mat& xx_in,
   );
 }
 
+// ---------------- 替换从这里开始 ----------------
+
 // [[Rcpp::export]]
-arma::vec count_info_cpp(const arma::mat& xx_in,
-                         const arma::vec& yy,
-                         Rcpp::IntegerVector nc,
-                         int R,
-                         int p) {
-  // scale X as in R
-  mat xx = scalex_mat(xx_in);
+Rcpp::List count_info_cpp(const arma::mat& xx_in,
+                          const arma::vec& yy,
+                          Rcpp::IntegerVector nc,
+                          int R,
+                          int p) {
+    mat xx = xx_in; 
 
-  // If single group -> LM case
-  if (nc.size() == 1) {
-    // Design matrix with intercept
-    mat X(xx.n_rows, p + 1, arma::fill::ones);
-    X.cols(1, p) = xx;
+    double D = 0.0;
+    double A = 0.0;
+    mat infor;
 
-    vec b = arma::solve(X, yy);
-    vec resid = yy - X * b;
+    // 情况 1: Single group (Linear Model)
+    if (nc.size() == 1) {
+        mat X(xx.n_rows, p + 1, arma::fill::ones);
+        X.cols(1, p) = xx;
 
-    double RSS = arma::dot(resid, resid);
-    double Var_lm = RSS / (static_cast<double>(X.n_rows) - p - 1.0);
+        vec b = arma::solve(X, yy);
+        vec resid = yy - X * b;
 
-    mat XtX = X.t() * X;
-    double D = arma::det(XtX) / std::pow(Var_lm, p);
-    double A = Var_lm * arma::trace(arma::inv(XtX));
+        double RSS = arma::dot(resid, resid);
+        double Var_lm = RSS / (static_cast<double>(X.n_rows) - p - 1.0);
+        
+        // 增加安全保护，防止方差极小导致除零
+        if (Var_lm <= 1e-8) Var_lm = 1e-8;
 
-    vec out(2);
-    out[0] = D;
-    out[1] = A;
-    return out;
-  }
+        // 信息矩阵
+        infor = (X.t() * X) / Var_lm;
+        
+        // 计算准则
+        D = arma::det(infor);
+        if (D <= 0.0) D = 1e-50; // 强制矫正，防止 R 端 log() 报非数值错误
+        
+        try {
+            A = arma::trace(arma::inv(infor));
+        } catch (...) {
+            A = NA_REAL; // 如果完全不可逆则返回 NA
+        }
+    } 
+    // 情况 2: Mixed Model (LMM)
+    else {
+        // 迭代估计方差分量
+        vec beta0 = ols_beta(xx, yy);
 
-  // LMM case: estimate Var.a, Var.e using same 0-1-2 iteration as your R code
-  vec beta0 = ols_beta(xx, yy);
+        Rcpp::List s0 = find_sigma_cpp(xx, yy, beta0, nc, R);
+        vec beta1 = find_beta_cpp(xx, yy, 
+                                  Rcpp::as<double>(s0["Var.a"]), 
+                                  Rcpp::as<double>(s0["Var.e"]), 
+                                  nc, R, p);
 
-  Rcpp::List s0 = find_sigma_cpp(xx, yy, beta0, nc, R);
-  vec beta1 = find_beta_cpp(xx, yy,
-                            Rcpp::as<double>(s0["Var.a"]),
-                            Rcpp::as<double>(s0["Var.e"]),
-                            nc, R, p);
+        Rcpp::List s1 = find_sigma_cpp(xx, yy, beta1, nc, R);
+        vec beta2 = find_beta_cpp(xx, yy, 
+                                  Rcpp::as<double>(s1["Var.a"]), 
+                                  Rcpp::as<double>(s1["Var.e"]), 
+                                  nc, R, p);
 
-  Rcpp::List s1 = find_sigma_cpp(xx, yy, beta1, nc, R);
-  vec beta2 = find_beta_cpp(xx, yy,
-                            Rcpp::as<double>(s1["Var.a"]),
-                            Rcpp::as<double>(s1["Var.e"]),
-                            nc, R, p);
+        Rcpp::List s2 = find_sigma_cpp(xx, yy, beta2, nc, R);
+        double Var_a = Rcpp::as<double>(s2["Var.a"]);
+        double Var_e = Rcpp::as<double>(s2["Var.e"]);
 
-  Rcpp::List s2 = find_sigma_cpp(xx, yy, beta2, nc, R);
-  double Var_a = Rcpp::as<double>(s2["Var.a"]);
-  double Var_e = Rcpp::as<double>(s2["Var.e"]);
+        // 增加安全保护：防止 Var_e 趋近于 0 导致矩阵出现 NaN
+        if (Var_e <= 1e-8) Var_e = 1e-8;
 
-  // Build XVX only (same as your count.info else-branch)
-  // drop nc==0
-  std::vector<int> ncz;
-  ncz.reserve(nc.size());
-  for (int v : nc) if (v != 0) ncz.push_back(v);
+        // 构建 XVX (信息矩阵)
+        mat XVX(p + 1, p + 1, arma::fill::zeros);
+        int offset = 0;
+        
+        for (int g = 0; g < nc.size(); ++g) {
+            int m = nc[g];
+            if (m <= 0) continue;
 
-  const int R1 = static_cast<int>(ncz.size());
-  mat XVX(p + 1, p + 1, arma::fill::zeros);
+            mat Xg(m, p + 1, arma::fill::ones);
+            Xg.cols(1, p) = xx.rows(offset, offset + m - 1);
 
-  int offset = 0;
-  for (int g = 0; g < R1; ++g) {
-    const int m = ncz[g];
-    mat Xg(m, p + 1, arma::fill::ones);
-    Xg.cols(1, p) = xx.rows(offset, offset + m - 1);
+            double denom = Var_e + static_cast<double>(m) * Var_a;
+            double weight = (denom <= 0) ? 0.0 : Var_a / (Var_e * denom);
 
-    const double denom = (Var_e + static_cast<double>(m) * Var_a);
-    const double gamma = (denom == 0.0) ? 0.0 : (static_cast<double>(m) * Var_a) / denom;
+            mat term1 = (Xg.t() * Xg) / Var_e;
+            mat sumX = arma::sum(Xg, 0).t();
+            mat term2 = weight * (sumX * sumX.t());
 
-    const double invVe = 1.0 / Var_e;
-    vec ones(m, arma::fill::ones);
-    arma::rowvec sX = arma::sum(Xg, 0);
+            XVX += (term1 - term2);
+            offset += m;
+        }
 
-    mat invV_X = invVe * (Xg - (gamma / static_cast<double>(m)) * (ones * sX));
-    XVX += Xg.t() * invV_X;
+        infor = XVX;
+        
+        D = arma::det(infor);
+        if (D <= 0.0) D = 1e-50; // 强制矫正，防止 R 端 log() 报非数值错误
+        
+        try {
+            A = arma::trace(arma::inv(infor));
+        } catch (...) {
+            A = NA_REAL;
+        }
+    }
 
-    offset += m;
-  }
-
-  double D = arma::det(XVX);
-  double A = arma::trace(arma::inv(XVX));
-
-  vec out(2);
-  out[0] = D;
-  out[1] = A;
-  return out;
+    return Rcpp::List::create(
+        Rcpp::Named("D") = D,
+        Rcpp::Named("A") = A,
+        Rcpp::Named("Information") = infor
+    );
 }
+
+// ---------------- 替换到这里结束 ----------------
