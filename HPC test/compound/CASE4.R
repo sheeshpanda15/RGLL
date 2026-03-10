@@ -500,7 +500,7 @@ Comp=function(N_all,p, R, Var.e, nloop, n, dist_x="case1", dist_a="N.ori",groups
 
 N=c(2500)
 modeltype="N.ori"
-result = Comp(N,p=50,R=20,Var.e=9,nloop=50,n=100,dist_x =filename, dist_a=modeltype,groupsize="large",setted_cluster=20,obj.c=0.1)
+result = Comp(N,p=50,R=20,Var.e=9,nloop=200,n=100,dist_x =filename, dist_a=modeltype,groupsize="large",setted_cluster=20,obj.c=0.1)
 result
 
 
