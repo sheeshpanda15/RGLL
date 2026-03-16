@@ -352,7 +352,7 @@ Comp=function(N_all,p, R, Var.e, nloop, n, dist_x="case1", dist_a="N.ori",groups
         obj.candi <- I.candi
         
         delta <- obj.candi - obj.curr
-        print(delta)
+       # print(delta)
         accept <- FALSE
         
         if (delta > 0) {
@@ -389,7 +389,7 @@ Comp=function(N_all,p, R, Var.e, nloop, n, dist_x="case1", dist_a="N.ori",groups
         T.curr <- T.curr * alpha
         
         # 可选：打印进度
-        cat(sprintf("Iter: %d, T: %.4f, Cn: %d, Obj: %.4f, Best: %.4f\n", iter, T.curr, Cn, obj.curr, obj.best))
+       # cat(sprintf("Iter: %d, T: %.4f, Cn: %d, Obj: %.4f, Best: %.4f\n", iter, T.curr, Cn, obj.curr, obj.best))
       }
       
       meanR <- meanR + R.best
@@ -446,13 +446,13 @@ Comp=function(N_all,p, R, Var.e, nloop, n, dist_x="case1", dist_a="N.ori",groups
       
       
       
-      cat(j,"-",k,"\n")
+     # cat(j,"-",k,"\n")
     }
     
     
     cat("mean time is",time.CGOSS/nloop,"\n")
     cat("mean CGOSS R is",meanR/nloop,"\n")
-    
+      
     
     cat("\n\n")
   }

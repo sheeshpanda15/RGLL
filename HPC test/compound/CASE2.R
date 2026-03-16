@@ -213,8 +213,13 @@ Comp=function(N_all,p, R, Var.e, nloop, n, dist_x="case1", dist_a="N.ori",groups
   lrs=length(N_all)
   names=c("ALL.bt.mat","GALL.bt.mat", 
           "ALL.pred","GALL.pred", 
-          "ALL.bt0.dif","GALL.bt0.dif"
+          "ALL.bt0.dif","GALL.bt0.dif",
+          "ALL.var_a","GALL.var_a",
+          "ALL.var_e","GALL.var_e",
+          "ALL.va_mse","GALL.va_mse",
+          "ALL.ve_mse","GALL.ve_mse"
   )
+  
   mat_names=c( "ALL.bt", "GALL.bt")
   for(name in names) {
     assign(name, matrix(NA, 1, nloop*lrs), envir = .GlobalEnv)
@@ -301,7 +306,8 @@ Comp=function(N_all,p, R, Var.e, nloop, n, dist_x="case1", dist_a="N.ori",groups
       # 计算初始目标函数值 (避免重复调用 C++ 函数)
       info_res_curr <- count_info_cpp(FXXXX.curr, FYYY.curr, C.curr, R_CGOSS.curr, p)
       I.curr <- sum(diag( solve( info_res_curr$Information) %*% calculate_K(p+1) ))  
-      obj.curr <- I.curr
+      D.curr <- info_res_curr$D
+      obj.curr <- D.curr
       
       # 2. 初始化全局最优记录 (Global Best)
       obj.best <- obj.curr
@@ -343,11 +349,11 @@ Comp=function(N_all,p, R, Var.e, nloop, n, dist_x="case1", dist_a="N.ori",groups
         # 计算候选目标函数值 (同样提取出来避免重复调用)
         info_res_candi <- count_info_cpp(F.candi, Y.candi, C.candi, R.candi, p)
         I.candi <- sum(diag( solve(info_res_candi$Information) %*% calculate_K(p+1) ))
-        
-        obj.candi <- I.candi
+        D.candi <- info_res_candi$D
+        obj.candi <- D.candi
         
         delta <- obj.candi - obj.curr
-        print(delta)
+        
         accept <- FALSE
         
         if (delta > 0) {
@@ -384,7 +390,7 @@ Comp=function(N_all,p, R, Var.e, nloop, n, dist_x="case1", dist_a="N.ori",groups
         T.curr <- T.curr * alpha
         
         # 可选：打印进度
-        cat(sprintf("Iter: %d, T: %.4f, Cn: %d, Obj: %.4f, Best: %.4f\n", iter, T.curr, Cn, obj.curr, obj.best))
+        #cat(sprintf("Iter: %d, T: %.4f, Cn: %d, Obj: %.4f, Best: %.4f\n", iter, T.curr, Cn, obj.curr, obj.best))
       }
       
       meanR <- meanR + R.best
@@ -410,7 +416,10 @@ Comp=function(N_all,p, R, Var.e, nloop, n, dist_x="case1", dist_a="N.ori",groups
       
       GALL.bt.mat[,itr] <- GALL.Est[[1]]
       GALL.bt0.dif[,itr] <- GALL.Est[[4]]
-      GALL.bt[,itr] <- GALL.Est[[5]]
+      GALL.var_a[,itr] <- GALL.Est[[6]]
+      GALL.var_e[,itr] <- GALL.Est[[7]]
+      GALL.va_mse[,itr] <- GALL.Est[[2]]
+      GALL.ve_mse[,itr] <- GALL.Est[[3]]
       
       
       
@@ -427,7 +436,10 @@ Comp=function(N_all,p, R, Var.e, nloop, n, dist_x="case1", dist_a="N.ori",groups
       
       ALL.bt.mat[,itr] <- ALL.Est[[1]]
       ALL.bt0.dif[,itr] <- ALL.Est[[4]]
-      ALL.bt[,itr] <- ALL.Est[[5]]
+      ALL.var_a[,itr] <- ALL.Est[[6]]
+      ALL.var_e[,itr] <- ALL.Est[[7]]
+      ALL.va_mse[,itr] <- ALL.Est[[2]]
+      ALL.ve_mse[,itr] <- ALL.Est[[3]]
       
       
       
@@ -435,9 +447,7 @@ Comp=function(N_all,p, R, Var.e, nloop, n, dist_x="case1", dist_a="N.ori",groups
       
       
       
-      
-      
-      cat(j,"-",k,"\n")
+      #cat(j,"-",k,"\n")
     }
     
     
@@ -456,22 +466,15 @@ Comp=function(N_all,p, R, Var.e, nloop, n, dist_x="case1", dist_a="N.ori",groups
     
     mse.ALL <- c(mse.ALL, mean(ALL.bt.mat[,loc]))
     mse.GALL <- c(mse.GALL, mean(GALL.bt.mat[,loc]))
-    
-    
   }
   
   rec1<-cbind(mse.ALL,mse.GALL)
-  
-  
-  
   ##################################################
   mspe.GALL<-  mspe.ALL <- c()
   for (i in 1:lrs) {
     loc <- ((i-1)*nloop+1):(i*nloop)
-    
     mspe.ALL <- c(mspe.ALL, mean(ALL.pred[,loc]))
     mspe.GALL <- c(mspe.GALL, mean(GALL.pred[,loc]))
-    
   }
   
   rec2 <- cbind(mspe.ALL,mspe.GALL)
@@ -489,9 +492,53 @@ Comp=function(N_all,p, R, Var.e, nloop, n, dist_x="case1", dist_a="N.ori",groups
   
   rec3 <- cbind(mse.bt0.ALL,mse.bt0.GALL)
   
+  ##################################################
+  Vara.GALL<-  Vara.ALL <- c()
+  for (i in 1:lrs) {
+    loc <- ((i-1)*nloop+1):(i*nloop)
+    Vara.ALL <- c(Vara.ALL, mean(ALL.var_a[,loc]))
+    Vara.GALL <- c(Vara.GALL, mean(GALL.var_a[,loc]))
+  }
+  
+  rec4 <- cbind(Vara.ALL,Vara.GALL)
+  
+  ##################################################
+  Vare.GALL<-  Vare.ALL <- c()
+  for (i in 1:lrs) {
+    loc <- ((i-1)*nloop+1):(i*nloop)
+    Vare.ALL <- c(Vare.ALL, mean(ALL.var_e[,loc]))
+    Vare.GALL <- c(Vare.GALL, mean(GALL.var_e[,loc]))
+  }
+  
+  rec5 <- cbind(Vare.ALL,Vare.GALL)
+  
+  
+  
+  ##################################################
+  Vamse.GALL<-  Vamse.ALL <- c()
+  for (i in 1:lrs) {
+    loc <- ((i-1)*nloop+1):(i*nloop)
+    Vamse.ALL <- c(Vamse.ALL, mean(ALL.va_mse[,loc]))
+    Vamse.GALL <- c(Vamse.GALL, mean(GALL.va_mse[,loc]))
+  }
+  
+  rec6 <- cbind(Vamse.ALL,Vamse.GALL)
+  
+  ##################################################
+  Vemse.GALL<-  Vemse.ALL <- c()
+  for (i in 1:lrs) {
+    loc <- ((i-1)*nloop+1):(i*nloop)
+    Vemse.ALL <- c(Vemse.ALL, mean(ALL.ve_mse[,loc]))
+    Vemse.GALL <- c(Vemse.GALL, mean(GALL.ve_mse[,loc]))
+  }
+  
+  rec7 <- cbind(Vemse.ALL,Vemse.GALL)
+  
+  
+  
   #save(rec1, rec2, rec3, file = paste0(dist_a,"_", dist_x,"NEW.Rdata"))
   
-  return(list(rec1,rec2,rec3))
+  return(list(rec1,rec2,rec3,rec4,rec5,rec6,rec7))
 }
 
 #########################
