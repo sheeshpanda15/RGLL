@@ -312,7 +312,7 @@ Comp=function(N_all,p, R, Var.e, nloop, n, dist_x="case1", dist_a="N.ori",groups
       # 2. 初始化全局最优记录 (Global Best)
       obj.best <- obj.curr
       FXX.best <- FXXXX.curr
-      FY.bestM <- FYYY.curr  # 注意：这里你原本写的是 FY.bestM，但下面更新是 FY.best，建议统一命名为 FY.best
+      FY.best <- FYYY.curr  # 注意：这里你原本写的是 FY.bestM，但下面更新是 FY.best，建议统一命名为 FY.best
       C.best   <- C.curr
       R.best   <- R_CGOSS.curr
       Cn.best  <- Cn
@@ -547,7 +547,7 @@ Comp=function(N_all,p, R, Var.e, nloop, n, dist_x="case1", dist_a="N.ori",groups
 
 N=c(2500)
 modeltype="N.ori"
-result = Comp(N,p=50,R=20,Var.e=9,nloop=200,n=100,dist_x =filename, dist_a=modeltype,groupsize="large",setted_cluster=20,obj.c=0.1)
+result = Comp(N,p=50,R=20,Var.e=9,nloop=2,n=100,dist_x =filename, dist_a=modeltype,groupsize="large",setted_cluster=20,obj.c=0.1)
 result
 
 

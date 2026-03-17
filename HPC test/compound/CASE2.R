@@ -366,18 +366,17 @@ Comp=function(N_all,p, R, Var.e, nloop, n, dist_x="case1", dist_a="N.ori",groups
         }
         
         if (accept) {
-          # 补全所有的状态同步，防止新旧状态错乱
           Cn           <- Cn.candi
           obj.curr     <- obj.candi
           FXXXX.curr   <- F.candi
-          FYYY.curr    <- Y.candi      # 新增补全
-          C.curr       <- C.candi      # 新增补全
-          R_CGOSS.curr <- R.candi      # 新增补全
+          FYYY.curr    <- Y.candi     
+          C.curr       <- C.candi      
+          R_CGOSS.curr <- R.candi      
           
           if (obj.candi > obj.best) {
             obj.best <- obj.candi
             FXX.best <- F.candi
-            FY.best  <- Y.candi      # 与上面的 FY.bestM 统一一下比较好
+            FY.best  <- Y.candi      
             C.best   <- C.candi
             R.best   <- R.candi
             Cn.best  <- Cn.candi
@@ -396,12 +395,6 @@ Comp=function(N_all,p, R, Var.e, nloop, n, dist_x="case1", dist_a="N.ori",groups
       meanR <- meanR + R.best
       time2.end <- Sys.time()
       time.CGOSS <- time.CGOSS + as.numeric(difftime(time2.end, time2.start, units = "secs"))
-      
-      
-      
-      
-      
-      
       
       ##############GALLL##############
       
@@ -440,11 +433,6 @@ Comp=function(N_all,p, R, Var.e, nloop, n, dist_x="case1", dist_a="N.ori",groups
       ALL.var_e[,itr] <- ALL.Est[[7]]
       ALL.va_mse[,itr] <- ALL.Est[[2]]
       ALL.ve_mse[,itr] <- ALL.Est[[3]]
-      
-      
-      
-      
-      
       
       
       #cat(j,"-",k,"\n")
