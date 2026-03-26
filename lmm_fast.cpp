@@ -300,3 +300,114 @@ Rcpp::List count_info_cpp(const arma::mat& xx_in,
 }
 
 // ---------------- 替换到这里结束 ----------------
+
+#include <RcppArmadillo.h>
+// [[Rcpp::depends(RcppArmadillo)]]
+
+using arma::mat;
+using arma::vec;
+
+// --------- 内部辅助：GLS 更新 beta (全随机系数版) -------------
+static inline vec find_beta_full_rs_internal(const mat& xx, const vec& yy, 
+                                            const mat& G, double Ve, 
+                                            Rcpp::IntegerVector nc, int p) {
+    int q = p + 1;
+    mat XVX(q, q, arma::fill::zeros);
+    vec XVY(q, arma::fill::zeros);
+    int offset = 0;
+    mat G_inv = arma::inv(G);
+
+    for (int g = 0; g < nc.size(); ++g) {
+        int m = nc[g];
+        if (m <= 0) continue;
+        mat Xg(m, q, arma::fill::ones);
+        Xg.cols(1, p) = xx.rows(offset, offset + m - 1);
+        vec yg = yy.subvec(offset, offset + m - 1);
+
+        mat M_inv = arma::inv(Ve * G_inv + Xg.t() * Xg);
+        mat invV_X = (1.0 / Ve) * (Xg - Xg * (M_inv * (Xg.t() * Xg)));
+        vec invV_y = (1.0 / Ve) * (yg - Xg * (M_inv * (Xg.t() * yg)));
+
+        XVX += Xg.t() * invV_X;
+        XVY += Xg.t() * invV_y;
+        offset += m;
+    }
+    return arma::solve(XVX, XVY);
+}
+
+// --------- 内部辅助：方差分量更新 (全随机系数版) -------------
+static inline Rcpp::List find_sigma_full_rs_internal(const mat& xx, const vec& yy, 
+                                                   const vec& beta, const mat& G_old, 
+                                                   double Ve_old, Rcpp::IntegerVector nc, int p) {
+    int q = p + 1;
+    mat G_new(q, q, arma::fill::zeros);
+    double Ve_new = 0.0;
+    int offset = 0;
+    mat G_inv_old = arma::inv(G_old);
+
+    for (int g = 0; g < nc.size(); ++g) {
+        int m = nc[g];
+        if (m <= 0) continue;
+        mat Xg(m, q, arma::fill::ones);
+        Xg.cols(1, p) = xx.rows(offset, offset + m - 1);
+        vec yg = yy.subvec(offset, offset + m - 1);
+        vec res_g = yg - Xg * beta;
+
+        mat M_inv = arma::inv(Ve_old * G_inv_old + Xg.t() * Xg);
+        vec Vg_inv_res = (1.0 / Ve_old) * (res_g - Xg * (M_inv * (Xg.t() * res_g)));
+        vec ug = G_old * Xg.t() * Vg_inv_res;
+        
+        G_new += ug * ug.t(); 
+        Ve_new += arma::dot(res_g - Xg * ug, res_g - Xg * ug);
+        offset += m;
+    }
+    return Rcpp::List::create(Rcpp::Named("G") = G_new / static_cast<double>(nc.size()),
+                             Rcpp::Named("Var.e") = Ve_new / static_cast<double>(yy.n_elem));
+}
+
+// [[Rcpp::export]]
+Rcpp::List Est_hat_RS_cpp(const arma::mat& xx_in,
+                                  const arma::vec& yy,
+                                  const arma::vec& beta_true, // 长度 p (不含截距)
+                                  double Var_a_true,          // 仅用于兼容接口，内部对比 G[0,0]
+                                  double Var_e_true,
+                                  Rcpp::IntegerVector nc,
+                                  int R,
+                                  int p) {
+    mat xx = xx_in;
+    int q = p + 1;
+
+    // 1. 初始值 (OLS)
+    mat D(xx.n_rows, q, arma::fill::ones);
+    D.cols(1, p) = xx;
+    vec beta_curr = arma::solve(D, yy);
+    mat G_curr = arma::eye(q, q) * 0.1;
+    double Ve_curr = 1.0;
+
+    // 2. 迭代 (固定 3 轮，匹配原代码逻辑深度)
+    for(int i = 0; i < 3; ++i) {
+        Rcpp::List sigs = find_sigma_full_rs_internal(xx, yy, beta_curr, G_curr, Ve_curr, nc, p);
+        G_curr = Rcpp::as<mat>(sigs["G"]);
+        Ve_curr = Rcpp::as<double>(sigs["Var.e"]);
+        G_curr.diag() += 1e-7; 
+        beta_curr = find_beta_full_rs_internal(xx, yy, G_curr, Ve_curr, nc, p);
+    }
+
+    // 3. 计算 MSE (完全对齐原输出格式)
+    vec beta2_no_intercept = beta_curr.subvec(1, p);
+    double bt_mse  = arma::accu(arma::square(beta2_no_intercept - beta_true));
+    double bt0_mse = std::pow(beta_curr[0] - 1.0, 2.0); // 假设真截距为 1.0
+    double va_mse  = std::pow(G_curr(0,0) - Var_a_true, 2.0); // 对比截距方差
+    double ve_mse  = std::pow(Ve_curr - Var_e_true, 2.0);
+
+    return Rcpp::List::create(
+        Rcpp::Named("bt.mse")  = bt_mse,
+        Rcpp::Named("va.mse")  = va_mse, // 注意：此处对比的是 G 矩阵的第一个对角元素
+        Rcpp::Named("ve.mse")  = ve_mse,
+        Rcpp::Named("bt0.mse") = bt0_mse,
+        Rcpp::Named("beta2")   = beta_curr,
+        Rcpp::Named("Var.a")   = G_curr(0,0), // 返回截距的随机方差
+        Rcpp::Named("Var.e")   = Ve_curr,
+        Rcpp::Named("G.hat")   = G_curr       // 额外附带全矩阵供参考
+    );
+}
