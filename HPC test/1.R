@@ -852,7 +852,6 @@ Comp_RS=function(N_all,p, R, Var.e, nloop, n, dist_x="case1", dist_a="N.ori",gro
         T.curr <- T.curr * alpha
         
         # 可选：打印进度
-        cat(sprintf("Iter: %d, T: %.4f, Cn: %d, Obj: %.4f, Best: %.4f\n", iter, T.curr, Cn, obj.curr, obj.best))
       }
       
       meanR <- meanR + R.best
