@@ -211,16 +211,11 @@ Comp=function(N_all,p, R, Var.e, nloop, n, dist_x="case1", dist_a="N.ori",groups
   sigma=diag(0.5,p,p)+matrix(0.5,p,p)
   #sigma=diag(1,p,p)
   lrs=length(N_all)
-  names=c("ALL.bt.mat","GALL.bt.mat", 
-          "ALL.pred","GALL.pred", 
-          "ALL.bt0.dif","GALL.bt0.dif",
-          "ALL.var_a","GALL.var_a",
-          "ALL.var_e","GALL.var_e",
-          "ALL.va_mse","GALL.va_mse",
-          "ALL.ve_mse","GALL.ve_mse"
+  names=c("ALL.bt.mat","GALL.bt.mat", "GALLRS.bt.mat","ALL.var_a","GALL.var_a","GALLRS.var_a",
+          "ALL.pred","GALL.pred", "GALLRS.pred","ALL.var_e","GALL.var_e","GALLRS.var_e",
+          "ALL.bt0.dif","GALL.bt0.dif","GALLRS.bt0.dif"
   )
-  
-  mat_names=c( "ALL.bt", "GALL.bt")
+  mat_names=c( "ALL.bt", "GALL.bt", "GALLRS.bt")
   for(name in names) {
     assign(name, matrix(NA, 1, nloop*lrs), envir = .GlobalEnv)
   }
@@ -352,7 +347,7 @@ Comp=function(N_all,p, R, Var.e, nloop, n, dist_x="case1", dist_a="N.ori",groups
         obj.candi <- I.candi
         
         delta <- obj.candi - obj.curr
-       # print(delta)
+        print(delta)
         accept <- FALSE
         
         if (delta > 0) {
@@ -389,7 +384,7 @@ Comp=function(N_all,p, R, Var.e, nloop, n, dist_x="case1", dist_a="N.ori",groups
         T.curr <- T.curr * alpha
         
         # 可选：打印进度
-        #cat(sprintf("Iter: %d, T: %.4f, Cn: %d, Obj: %.4f, Best: %.4f\n", iter, T.curr, Cn, obj.curr, obj.best))
+        cat(sprintf("Iter: %d, T: %.4f, Cn: %d, Obj: %.4f, Best: %.4f\n", iter, T.curr, Cn, obj.curr, obj.best))
       }
       
       meanR <- meanR + R.best
@@ -415,10 +410,27 @@ Comp=function(N_all,p, R, Var.e, nloop, n, dist_x="case1", dist_a="N.ori",groups
       
       GALL.bt.mat[,itr] <- GALL.Est[[1]]
       GALL.bt0.dif[,itr] <- GALL.Est[[4]]
+      GALL.bt[,itr] <- GALL.Est[[5]]
       GALL.var_a[,itr] <- GALL.Est[[6]]
       GALL.var_e[,itr] <- GALL.Est[[7]]
-      GALL.va_mse[,itr] <- GALL.Est[[2]]
-      GALL.ve_mse[,itr] <- GALL.Est[[3]]
+      
+      
+      
+      ##############GALLLRS##############
+      GALLRS.Est <- Est_hat_RS_cpp(xx=FXX.best, yy=FY.best, 
+                              beta, Var.a, Var.e, C.best, R.best, p)
+      
+      # 修改说明：交换了 C.test 和 C.best 的位置
+      # nc 应该是 C.best (子样本组大小), C 应该是 C.test (测试集组大小)
+      GALLRS.pred[,itr] <- MSPE_fn(FY.test, FXX.test, FXX.best, FY.best, 
+                                   GALLRS.Est[[5]], GALLRS.Est[[6]], GALLRS.Est[[7]], 
+                                 C.best, C.test, R.best)
+      
+      GALLRS.bt.mat[,itr] <- GALLRS.Est[[1]]
+      GALLRS.bt0.dif[,itr] <- GALLRS.Est[[4]]
+      GALLRS.bt[,itr] <- GALLRS.Est[[5]]
+      GALLRS.var_a[,itr] <- GALLRS.Est[[6]]
+      GALLRS.var_e[,itr] <- GALLRS.Est[[7]]
       
       
       
@@ -435,10 +447,9 @@ Comp=function(N_all,p, R, Var.e, nloop, n, dist_x="case1", dist_a="N.ori",groups
       
       ALL.bt.mat[,itr] <- ALL.Est[[1]]
       ALL.bt0.dif[,itr] <- ALL.Est[[4]]
+      ALL.bt[,itr] <- ALL.Est[[5]]
       ALL.var_a[,itr] <- ALL.Est[[6]]
       ALL.var_e[,itr] <- ALL.Est[[7]]
-      ALL.va_mse[,itr] <- ALL.Est[[2]]
-      ALL.ve_mse[,itr] <- ALL.Est[[3]]
       
       
       
@@ -446,7 +457,8 @@ Comp=function(N_all,p, R, Var.e, nloop, n, dist_x="case1", dist_a="N.ori",groups
       
       
       
-      #cat(j,"-",k,"\n")
+      
+      cat(j,"-",k,"\n")
     }
     
     
@@ -459,85 +471,79 @@ Comp=function(N_all,p, R, Var.e, nloop, n, dist_x="case1", dist_a="N.ori",groups
   
   
   ##########################################################
-  mse.ALL<-mse.GALL<-c()
+  mse.ALL<-mse.GALL<-mse.GALLRS<-c()
   for (i in 1:lrs) {
     loc <- ((i-1)*nloop+1):(i*nloop)
     
     mse.ALL <- c(mse.ALL, mean(ALL.bt.mat[,loc]))
     mse.GALL <- c(mse.GALL, mean(GALL.bt.mat[,loc]))
+    mse.GALLRS <- c(mse.GALLRS, mean(GALLRS.bt.mat[,loc]))
+    
   }
   
-  rec1<-cbind(mse.ALL,mse.GALL)
+  rec1<-cbind(mse.ALL,mse.GALL,mse.GALLRS)
+  
+  
+  
   ##################################################
-  mspe.GALL<-  mspe.ALL <- c()
+  mspe.GALL<-  mspe.ALL<-  mspe.GALLRS <- c()
   for (i in 1:lrs) {
     loc <- ((i-1)*nloop+1):(i*nloop)
+    
     mspe.ALL <- c(mspe.ALL, mean(ALL.pred[,loc]))
     mspe.GALL <- c(mspe.GALL, mean(GALL.pred[,loc]))
+    mspe.GALLRS <- c(mspe.GALLRS, mean(GALLRS.pred[,loc]))
   }
   
-  rec2 <- cbind(mspe.ALL,mspe.GALL)
+  rec2 <- cbind(mspe.ALL,mspe.GALL,mspe.GALLRS)
   
   ################################################
-  mse.bt0.ALL <- mse.bt0.GALL <- c()
+  mse.bt0.ALL <- mse.bt0.GALL<- mse.bt0.GALLRS <- c()
   for (i in 1:lrs) {
     loc <- ((i-1)*nloop+1):(i*nloop)
     
     mse.bt0.ALL <- c(mse.bt0.ALL, mean(ALL.bt0.dif[,loc]))
     mse.bt0.GALL <- c(mse.bt0.GALL, mean(GALL.bt0.dif[,loc]))
-    
+    mse.bt0.GALLRS <- c(mse.bt0.GALLRS, mean(GALLRS.bt0.dif[,loc]))
     
   }
   
-  rec3 <- cbind(mse.bt0.ALL,mse.bt0.GALL)
+  rec3 <- cbind(mse.bt0.ALL,mse.bt0.GALL,mse.bt0.GALLRS)
+  
   
   ##################################################
-  Vara.GALL<-  Vara.ALL <- c()
+  Vara.GALL<-  Vara.ALL <-Vara.GALLRS<- c()
   for (i in 1:lrs) {
     loc <- ((i-1)*nloop+1):(i*nloop)
     Vara.ALL <- c(Vara.ALL, mean(ALL.var_a[,loc]))
     Vara.GALL <- c(Vara.GALL, mean(GALL.var_a[,loc]))
+    Vara.GALLRS <- c(Vara.GALLRS, mean(GALLRS.var_a[,loc]))
   }
   
-  rec4 <- cbind(Vara.ALL,Vara.GALL)
+  rec4 <- cbind(Vara.ALL,Vara.GALL,Vara.GALLRS)
   
   ##################################################
-  Vare.GALL<-  Vare.ALL <- c()
+  Vare.GALL<-  Vare.ALL <-Vare.GALLRS<- c()
   for (i in 1:lrs) {
     loc <- ((i-1)*nloop+1):(i*nloop)
     Vare.ALL <- c(Vare.ALL, mean(ALL.var_e[,loc]))
     Vare.GALL <- c(Vare.GALL, mean(GALL.var_e[,loc]))
+    Vare.GALLRS <- c(Vare.GALLRS, mean(GALLRS.var_e[,loc]))
   }
   
-  rec5 <- cbind(Vare.ALL,Vare.GALL)
+  rec5 <- cbind(Vare.ALL,Vare.GALL,Vare.GALLRS)
   
   
   
   ##################################################
-  Vamse.GALL<-  Vamse.ALL <- c()
-  for (i in 1:lrs) {
-    loc <- ((i-1)*nloop+1):(i*nloop)
-    Vamse.ALL <- c(Vamse.ALL, mean(ALL.va_mse[,loc]))
-    Vamse.GALL <- c(Vamse.GALL, mean(GALL.va_mse[,loc]))
-  }
   
-  rec6 <- cbind(Vamse.ALL,Vamse.GALL)
   
-  ##################################################
-  Vemse.GALL<-  Vemse.ALL <- c()
-  for (i in 1:lrs) {
-    loc <- ((i-1)*nloop+1):(i*nloop)
-    Vemse.ALL <- c(Vemse.ALL, mean(ALL.ve_mse[,loc]))
-    Vemse.GALL <- c(Vemse.GALL, mean(GALL.ve_mse[,loc]))
-  }
-  
-  rec7 <- cbind(Vemse.ALL,Vemse.GALL)
   
   
   
   #save(rec1, rec2, rec3, file = paste0(dist_a,"_", dist_x,"NEW.Rdata"))
   
-  return(list(rec1,rec2,rec3,rec4,rec5,rec6,rec7))
+  return(list(rec1,rec2,rec3,rec4,rec5))
 }
 
 #########################
