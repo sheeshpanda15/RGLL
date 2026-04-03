@@ -20,7 +20,7 @@ library(ClusterR)
 library(MASS)
 Rcpp::sourceCpp("lmm_fast.cpp")
 
-filename<-CASE<-"case1"
+filename<-CASE<-"case5"
 calculate_K <- function(p) {
   
   k_diag <- c(1, rep(1/3, p - 1))
@@ -83,6 +83,65 @@ MSPE_fn = function(fy_test, fx_test, sx_train, sy_train, beta_hat, Var.a, Var.e,
   pred_labels <- ClusterR::predict_KMeans(fx_test, centroids)
   u_assigned <- mv_hat[pred_labels]
   y_hat <- cbind(1, fx_test) %*% beta_hat + u_assigned
+  mspe <- mean((fy_test - y_hat)^2)
+  return(mspe)
+}
+MSPE_fn_RS = function(fy_test, fx_test, sx_train, sy_train, beta_hat, G_hat, Var.e, nc_train, centroids){
+  R <- length(nc_train)
+  q <- ncol(fx_test) + 1
+  u_vecs <- matrix(0, nrow = R, ncol = q)
+  index <- 1
+  X_train_full <- cbind(1, sx_train)
+  G_inv <- solve(G_hat + diag(1e-7, q))
+  
+  for (i in 1:R) {
+    curr_idx <- index:(index + nc_train[i] - 1)
+    Xg <- X_train_full[curr_idx, , drop = FALSE]
+    yg <- sy_train[curr_idx]
+    
+    res_g <- yg - Xg %*% beta_hat
+    M <- solve(Var.e * G_inv + t(Xg) %*% Xg)
+    u_vecs[i, ] <- M %*% (t(Xg) %*% res_g)
+    
+    index <- index + nc_train[i]
+  }
+  
+  pred_labels <- ClusterR::predict_KMeans(fx_test, centroids)
+  u_assigned <- u_vecs[pred_labels, ]
+  
+  X_test_full <- cbind(1, fx_test)
+  y_hat <- X_test_full %*% beta_hat + rowSums(X_test_full * u_assigned)
+  
+  mspe <- mean((fy_test - y_hat)^2)
+  return(mspe)
+}
+MSPE_tru_RS = function(fy_test, fx_test, sx_train, sy_train, beta_hat, G_hat, Var.e, nc_train, nc_test, R){
+  q <- ncol(fx_test) + 1
+  index_train <- 1
+  index_test <- 1
+  X_train_full <- cbind(1, sx_train)
+  X_test_full <- cbind(1, fx_test)
+  G_inv <- solve(G_hat + diag(1e-7, q))
+  y_hat <- numeric(length(fy_test))
+  
+  for (i in 1:R) {
+    curr_idx_train <- index_train:(index_train + nc_train[i] - 1)
+    curr_idx_test <- index_test:(index_test + nc_test[i] - 1)
+    
+    Xg_train <- X_train_full[curr_idx_train, , drop = FALSE]
+    yg_train <- sy_train[curr_idx_train]
+    
+    res_g <- yg_train - Xg_train %*% beta_hat
+    M <- solve(Var.e * G_inv + t(Xg_train) %*% Xg_train)
+    u_g <- M %*% (t(Xg_train) %*% res_g)
+    
+    Xg_test <- X_test_full[curr_idx_test, , drop = FALSE]
+    y_hat[curr_idx_test] <- Xg_test %*% beta_hat + Xg_test %*% u_g
+    
+    index_train <- index_train + nc_train[i]
+    index_test <- index_test + nc_test[i]
+  }
+  
   mspe <- mean((fy_test - y_hat)^2)
   return(mspe)
 }
@@ -329,6 +388,26 @@ Comp=function(N_all,p, R, Var.e, nloop, n, dist_x="case1", dist_a="N.ori",groups
         
       }
       
+      for (col_idx in 1:p) {
+        # 联合训练集和测试集，寻找当前维度的全局最值
+        global_min <- min(FXX.train[, col_idx], FXX.test[, col_idx])
+        global_max <- max(FXX.train[, col_idx], FXX.test[, col_idx])
+        
+        # 避免分母为零的极端情况
+        if (global_max > global_min) {
+          # 使用极大极小线性缩放公式
+          FXX.train[, col_idx] <- 2 * (FXX.train[, col_idx] - global_min) / (global_max - global_min) - 1
+          FXX.test[, col_idx]  <- 2 * (FXX.test[, col_idx] - global_min) / (global_max - global_min) - 1
+        } else {
+          # 如果该列所有值都一样，统一置为 0
+          FXX.train[, col_idx] <- 0
+          FXX.test[, col_idx]  <- 0
+        }
+      }
+      
+      
+      
+      
       FY.test <- 1 + FXX.test%*%beta + Fa.test + Fe.test
       FY.train <- 1 + FXX.train%*%beta + Fa.train + Fe.train
       
@@ -363,7 +442,7 @@ Comp=function(N_all,p, R, Var.e, nloop, n, dist_x="case1", dist_a="N.ori",groups
       T.curr <- T.initial        
       alpha  <- 0.95            
       iter   <- 0
-      max_iter <- 80           
+      max_iter <- 50           
       
       ################### SA 主循环 ###################
       repeat {
@@ -371,7 +450,7 @@ Comp=function(N_all,p, R, Var.e, nloop, n, dist_x="case1", dist_a="N.ori",groups
         if (T.curr < 1e-4 || iter > max_iter) break 
         
         # 修正步长逻辑：允许加 1 或减 1 的随机游走
-        step <- sample(c(0, 1), 1) 
+        step <- sample(c(-1,1, 2), 1) 
         Cn.candi <- Cn + step
         
         # 防止聚类数异常 (不能小于 1)
@@ -458,35 +537,28 @@ Comp=function(N_all,p, R, Var.e, nloop, n, dist_x="case1", dist_a="N.ori",groups
       GALL.bt[,itr] <- GALL.Est[[5]]
       GALL.var_a[,itr] <- GALL.Est[[6]]
       GALL.var_e[,itr] <- GALL.Est[[7]]
-      
-      
-      
       ##############GALLLRS##############
       GALLRS.Est <- Est_hat_RS_cpp(xx=FXX.best, yy=FY.best, 
-                              beta, Var.a, Var.e, C.best, R.best, p)
-      GALLRS.pred[,itr] <- MSPE_fn(FY.test, FXX.test, FXX.best, FY.best, 
-                                   GALLRS.Est[[5]], GALLRS.Est[[6]], GALLRS.Est[[7]], 
-                                   C.best, centroids.best)
+                                   beta, Var.a, Var.e, C.best, R.best, p)
+      GALLRS.pred[,itr] <- MSPE_fn_RS(FY.test, FXX.test, FXX.best, FY.best, 
+                                      GALLRS.Est$beta2, GALLRS.Est$G.hat, GALLRS.Est$Var.e, 
+                                      C.best, centroids.best)
       GALLRS.bt.mat[,itr] <- GALLRS.Est[[1]]
       GALLRS.bt0.dif[,itr] <- GALLRS.Est[[4]]
       GALLRS.bt[,itr] <- GALLRS.Est[[5]]
       GALLRS.var_a[,itr] <- GALLRS.Est[[6]]
       GALLRS.var_e[,itr] <- GALLRS.Est[[7]]
-      
-      
-      
       ##############ALLL##############
-      ALL.Est <- Est_hat_cpp(xx=FXX.train, yy=FY.train, 
-                             beta, Var.a, Var.e, C.train, R, p)
-      ALL.pred[,itr] <- MSPE_tru(FY.test, FXX.test, FXX.train, FY.train, 
-                                ALL.Est[[5]], ALL.Est[[6]], ALL.Est[[7]], 
-                                C.train, C.test, R)
+      ALL.Est <- Est_hat_RS_cpp(xx=FXX.train, yy=FY.train, 
+                                beta, Var.a, Var.e, C.train, R, p)
+      ALL.pred[,itr] <- MSPE_tru_RS(FY.test, FXX.test, FXX.train, FY.train, 
+                                    ALL.Est$beta2, ALL.Est$G.hat, ALL.Est$Var.e, 
+                                    C.train, C.test, R)
       ALL.bt.mat[,itr] <- ALL.Est[[1]]
       ALL.bt0.dif[,itr] <- ALL.Est[[4]]
       ALL.bt[,itr] <- ALL.Est[[5]]
       ALL.var_a[,itr] <- ALL.Est[[6]]
       ALL.var_e[,itr] <- ALL.Est[[7]]
-      
       
       
       cat(j,"-",k,"\n")
@@ -577,10 +649,7 @@ Comp=function(N_all,p, R, Var.e, nloop, n, dist_x="case1", dist_a="N.ori",groups
   return(list(rec1,rec2,rec3,rec4,rec5))
 }
 
-
-
 ##################################
-
 Comp_RS=function(N_all,p, R, Var.e, nloop, n, dist_x="case1", dist_a="N.ori",groupsize,obj.c=0.5){
   big_column_vector<-c()
   beta=rep(1, p)
@@ -710,8 +779,30 @@ Comp_RS=function(N_all,p, R, Var.e, nloop, n, dist_x="case1", dist_a="N.ori",gro
         
       }
       
+      
+      
+      for (col_idx in 1:p) {
+        # 联合训练集和测试集，寻找当前维度的全局最值
+        global_min <- min(FXX.train[, col_idx], FXX.test[, col_idx])
+        global_max <- max(FXX.train[, col_idx], FXX.test[, col_idx])
+        
+        # 避免分母为零的极端情况
+        if (global_max > global_min) {
+          # 使用极大极小线性缩放公式
+          FXX.train[, col_idx] <- 2 * (FXX.train[, col_idx] - global_min) / (global_max - global_min) - 1
+          FXX.test[, col_idx]  <- 2 * (FXX.test[, col_idx] - global_min) / (global_max - global_min) - 1
+        } else {
+          # 如果该列所有值都一样，统一置为 0
+          FXX.train[, col_idx] <- 0
+          FXX.test[, col_idx]  <- 0
+        }
+      }
+      
+      
+      
+      
       sigma.a <- 2.25              # 随机截距标准差
-      sigma.b <- 1            # 随机斜率标准差
+      sigma.b <- 0.1            # 随机斜率标准差
       sigma.e <- 9              # 误差标准差
       
       Fa.train <- rep(NA, sum(C.train))
@@ -725,9 +816,10 @@ Comp_RS=function(N_all,p, R, Var.e, nloop, n, dist_x="case1", dist_a="N.ori",gro
         idx.test  <- (SC.test[i] + 1):(SC.test[i+1])
         
         # 第 i 组随机截距
-        a.i <- rnorm(1, mean = 0, sd = sqrt(sigma.a))
-        
+        a.i.train <- rnorm(1, mean = 0, sd = sqrt(sigma.a))
+        a.i.test <- rnorm(1, mean = 0, sd = sqrt(sigma.a))
         # 第 i 组随机斜率向量
+        
         b.i <- rnorm(p, mean = 0, sd = sqrt(sigma.b))
         
         # 误差项
@@ -735,21 +827,21 @@ Comp_RS=function(N_all,p, R, Var.e, nloop, n, dist_x="case1", dist_a="N.ori",gro
         e.test  <- rnorm(C.test[i], mean = 0, sd = sqrt(sigma.e))
         
         # 保存随机截距
-        Fa.train[idx.train] <- a.i
-        Fa.test[idx.test]   <- a.i
+        Fa.train[idx.train] <- a.i.train
+        Fa.test[idx.test]   <- a.i.test
         
         # 生成响应
-        FY.train[idx.train] <-1+ a.i +
+        FY.train[idx.train] <-1+ a.i.train +
           FXX.train[idx.train, ] %*% (beta + b.i) + e.train
         
-        FY.test[idx.test] <-1+ a.i +
+        FY.test[idx.test] <-1+ a.i.test +
           FXX.test[idx.test, ] %*% (beta + b.i) + e.test
       }
       
       
       
       
-  
+      
       
       ####################################################################################################
       
@@ -766,7 +858,7 @@ Comp_RS=function(N_all,p, R, Var.e, nloop, n, dist_x="case1", dist_a="N.ori",gro
       C.curr       <- cluster.curr$cluster_sizes_vector
       centroids.curr <- cluster.curr$centroids
       # 计算初始目标函数值 (避免重复调用 C++ 函数)
-      info_res_curr <- count_info_cpp(FXXXX.curr, FYYY.curr, C.curr, R_CGOSS.curr, p)
+      info_res_curr <- count_info_rs_cpp(FXXXX.curr, FYYY.curr, C.curr, R_CGOSS.curr, p)
       I.curr <- -sum(diag( solve( info_res_curr$Information) %*% K_mat ))  
       obj.curr <- I.curr
       
@@ -782,7 +874,7 @@ Comp_RS=function(N_all,p, R, Var.e, nloop, n, dist_x="case1", dist_a="N.ori",gro
       T.curr <- T.initial        
       alpha  <- 0.95            
       iter   <- 0
-      max_iter <- 80           
+      max_iter <- 50           
       
       ################### SA 主循环 ###################
       repeat {
@@ -790,7 +882,7 @@ Comp_RS=function(N_all,p, R, Var.e, nloop, n, dist_x="case1", dist_a="N.ori",gro
         if (T.curr < 1e-4 || iter > max_iter) break 
         
         # 修正步长逻辑：允许加 1 或减 1 的随机游走
-        step <- sample(c(0, 1), 1) 
+        step <- sample(c(-1,1, 2), 1) 
         Cn.candi <- Cn + step
         
         # 防止聚类数异常 (不能小于 1)
@@ -808,7 +900,7 @@ Comp_RS=function(N_all,p, R, Var.e, nloop, n, dist_x="case1", dist_a="N.ori",gro
         C.candi <- cluster.candi$cluster_sizes_vector
         
         # 计算候选目标函数值 (同样提取出来避免重复调用)
-        info_res_candi <- count_info_cpp(F.candi, Y.candi, C.candi, R.candi, p)
+        info_res_candi <- count_info_rs_cpp(F.candi, Y.candi, C.candi, R.candi, p)
         I.candi <- -sum(diag( solve(info_res_candi$Information) %*% K_mat ))
         
         obj.candi <- I.candi
@@ -852,7 +944,6 @@ Comp_RS=function(N_all,p, R, Var.e, nloop, n, dist_x="case1", dist_a="N.ori",gro
         T.curr <- T.curr * alpha
         
         # 可选：打印进度
-        cat(sprintf("Iter: %d, T: %.4f, Cn: %d, Obj: %.4f, Best: %.4f\n", iter, T.curr, Cn, obj.curr, obj.best))
       }
       
       meanR <- meanR + R.best
@@ -883,9 +974,9 @@ Comp_RS=function(N_all,p, R, Var.e, nloop, n, dist_x="case1", dist_a="N.ori",gro
       ##############GALLLRS##############
       GALLRS.Est <- Est_hat_RS_cpp(xx=FXX.best, yy=FY.best, 
                                    beta, Var.a, Var.e, C.best, R.best, p)
-      GALLRS.pred[,itr] <- MSPE_fn(FY.test, FXX.test, FXX.best, FY.best, 
-                                   GALLRS.Est[[5]], GALLRS.Est[[6]], GALLRS.Est[[7]], 
-                                   C.best, centroids.best)
+      GALLRS.pred[,itr] <- MSPE_fn_RS(FY.test, FXX.test, FXX.best, FY.best, 
+                                      GALLRS.Est$beta2, GALLRS.Est$G.hat, GALLRS.Est$Var.e, 
+                                      C.best, centroids.best)
       GALLRS.bt.mat[,itr] <- GALLRS.Est[[1]]
       GALLRS.bt0.dif[,itr] <- GALLRS.Est[[4]]
       GALLRS.bt[,itr] <- GALLRS.Est[[5]]
@@ -896,10 +987,10 @@ Comp_RS=function(N_all,p, R, Var.e, nloop, n, dist_x="case1", dist_a="N.ori",gro
       
       ##############ALLL##############
       ALL.Est <- Est_hat_RS_cpp(xx=FXX.train, yy=FY.train, 
-                             beta, Var.a, Var.e, C.train, R, p)
-      ALL.pred[,itr] <- MSPE_tru(FY.test, FXX.test, FXX.train, FY.train, 
-                                ALL.Est[[5]], ALL.Est[[6]], ALL.Est[[7]], 
-                                C.train, C.test, R)
+                                beta, Var.a, Var.e, C.train, R, p)
+      ALL.pred[,itr] <- MSPE_tru_RS(FY.test, FXX.test, FXX.train, FY.train, 
+                                    ALL.Est$beta2, ALL.Est$G.hat, ALL.Est$Var.e, 
+                                    C.train, C.test, R)
       ALL.bt.mat[,itr] <- ALL.Est[[1]]
       ALL.bt0.dif[,itr] <- ALL.Est[[4]]
       ALL.bt[,itr] <- ALL.Est[[5]]
@@ -1002,9 +1093,9 @@ Comp_RS=function(N_all,p, R, Var.e, nloop, n, dist_x="case1", dist_a="N.ori",gro
 
 N=c(2500)
 modeltype="N.ori"
-result = Comp(N,p=50,R=20,Var.e=9,nloop=200,n=100,dist_x =filename, dist_a=modeltype,groupsize="large",obj.c=0.1)
+result = Comp(N,p=50,R=20,Var.e=9,nloop=50,n=100,dist_x =filename, dist_a=modeltype,groupsize="large",obj.c=0.1)
 
-result_RS = Comp_RS(N,p=50,R=20,Var.e=9,nloop=200,n=100,dist_x =filename, dist_a=modeltype,groupsize="large",obj.c=0.1)
+result_RS = Comp_RS(N,p=50,R=20,Var.e=9,nloop=50,n=100,dist_x =filename, dist_a=modeltype,groupsize="large",obj.c=0.1)
 
 result
 

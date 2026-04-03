@@ -388,6 +388,26 @@ Comp=function(N_all,p, R, Var.e, nloop, n, dist_x="case1", dist_a="N.ori",groups
         
       }
       
+      for (col_idx in 1:p) {
+        # 联合训练集和测试集，寻找当前维度的全局最值
+        global_min <- min(FXX.train[, col_idx], FXX.test[, col_idx])
+        global_max <- max(FXX.train[, col_idx], FXX.test[, col_idx])
+        
+        # 避免分母为零的极端情况
+        if (global_max > global_min) {
+          # 使用极大极小线性缩放公式
+          FXX.train[, col_idx] <- 2 * (FXX.train[, col_idx] - global_min) / (global_max - global_min) - 1
+          FXX.test[, col_idx]  <- 2 * (FXX.test[, col_idx] - global_min) / (global_max - global_min) - 1
+        } else {
+          # 如果该列所有值都一样，统一置为 0
+          FXX.train[, col_idx] <- 0
+          FXX.test[, col_idx]  <- 0
+        }
+      }
+      
+      
+      
+      
       FY.test <- 1 + FXX.test%*%beta + Fa.test + Fe.test
       FY.train <- 1 + FXX.train%*%beta + Fa.train + Fe.train
       
@@ -430,7 +450,7 @@ Comp=function(N_all,p, R, Var.e, nloop, n, dist_x="case1", dist_a="N.ori",groups
         if (T.curr < 1e-4 || iter > max_iter) break 
         
         # 修正步长逻辑：允许加 1 或减 1 的随机游走
-        step <- sample(c(0, 1), 1) 
+        step <- sample(c(-1,1, 2), 1) 
         Cn.candi <- Cn + step
         
         # 防止聚类数异常 (不能小于 1)
@@ -517,9 +537,6 @@ Comp=function(N_all,p, R, Var.e, nloop, n, dist_x="case1", dist_a="N.ori",groups
       GALL.bt[,itr] <- GALL.Est[[5]]
       GALL.var_a[,itr] <- GALL.Est[[6]]
       GALL.var_e[,itr] <- GALL.Est[[7]]
-      
-      
-      
       ##############GALLLRS##############
       GALLRS.Est <- Est_hat_RS_cpp(xx=FXX.best, yy=FY.best, 
                                    beta, Var.a, Var.e, C.best, R.best, p)
@@ -531,9 +548,6 @@ Comp=function(N_all,p, R, Var.e, nloop, n, dist_x="case1", dist_a="N.ori",groups
       GALLRS.bt[,itr] <- GALLRS.Est[[5]]
       GALLRS.var_a[,itr] <- GALLRS.Est[[6]]
       GALLRS.var_e[,itr] <- GALLRS.Est[[7]]
-      
-      
-      
       ##############ALLL##############
       ALL.Est <- Est_hat_RS_cpp(xx=FXX.train, yy=FY.train, 
                                 beta, Var.a, Var.e, C.train, R, p)
@@ -635,10 +649,7 @@ Comp=function(N_all,p, R, Var.e, nloop, n, dist_x="case1", dist_a="N.ori",groups
   return(list(rec1,rec2,rec3,rec4,rec5))
 }
 
-
-
 ##################################
-
 Comp_RS=function(N_all,p, R, Var.e, nloop, n, dist_x="case1", dist_a="N.ori",groupsize,obj.c=0.5){
   big_column_vector<-c()
   beta=rep(1, p)
@@ -768,8 +779,30 @@ Comp_RS=function(N_all,p, R, Var.e, nloop, n, dist_x="case1", dist_a="N.ori",gro
         
       }
       
+      
+      
+      for (col_idx in 1:p) {
+        # 联合训练集和测试集，寻找当前维度的全局最值
+        global_min <- min(FXX.train[, col_idx], FXX.test[, col_idx])
+        global_max <- max(FXX.train[, col_idx], FXX.test[, col_idx])
+        
+        # 避免分母为零的极端情况
+        if (global_max > global_min) {
+          # 使用极大极小线性缩放公式
+          FXX.train[, col_idx] <- 2 * (FXX.train[, col_idx] - global_min) / (global_max - global_min) - 1
+          FXX.test[, col_idx]  <- 2 * (FXX.test[, col_idx] - global_min) / (global_max - global_min) - 1
+        } else {
+          # 如果该列所有值都一样，统一置为 0
+          FXX.train[, col_idx] <- 0
+          FXX.test[, col_idx]  <- 0
+        }
+      }
+      
+      
+      
+      
       sigma.a <- 2.25              # 随机截距标准差
-      sigma.b <- 1            # 随机斜率标准差
+      sigma.b <- 0.1            # 随机斜率标准差
       sigma.e <- 9              # 误差标准差
       
       Fa.train <- rep(NA, sum(C.train))
@@ -783,9 +816,10 @@ Comp_RS=function(N_all,p, R, Var.e, nloop, n, dist_x="case1", dist_a="N.ori",gro
         idx.test  <- (SC.test[i] + 1):(SC.test[i+1])
         
         # 第 i 组随机截距
-        a.i <- rnorm(1, mean = 0, sd = sqrt(sigma.a))
-        
+        a.i.train <- rnorm(1, mean = 0, sd = sqrt(sigma.a))
+        a.i.test <- rnorm(1, mean = 0, sd = sqrt(sigma.a))
         # 第 i 组随机斜率向量
+        
         b.i <- rnorm(p, mean = 0, sd = sqrt(sigma.b))
         
         # 误差项
@@ -793,14 +827,14 @@ Comp_RS=function(N_all,p, R, Var.e, nloop, n, dist_x="case1", dist_a="N.ori",gro
         e.test  <- rnorm(C.test[i], mean = 0, sd = sqrt(sigma.e))
         
         # 保存随机截距
-        Fa.train[idx.train] <- a.i
-        Fa.test[idx.test]   <- a.i
+        Fa.train[idx.train] <- a.i.train
+        Fa.test[idx.test]   <- a.i.test
         
         # 生成响应
-        FY.train[idx.train] <-1+ a.i +
+        FY.train[idx.train] <-1+ a.i.train +
           FXX.train[idx.train, ] %*% (beta + b.i) + e.train
         
-        FY.test[idx.test] <-1+ a.i +
+        FY.test[idx.test] <-1+ a.i.test +
           FXX.test[idx.test, ] %*% (beta + b.i) + e.test
       }
       
@@ -848,7 +882,7 @@ Comp_RS=function(N_all,p, R, Var.e, nloop, n, dist_x="case1", dist_a="N.ori",gro
         if (T.curr < 1e-4 || iter > max_iter) break 
         
         # 修正步长逻辑：允许加 1 或减 1 的随机游走
-        step <- sample(c(0, 1), 1) 
+        step <- sample(c(-1,1, 2), 1) 
         Cn.candi <- Cn + step
         
         # 防止聚类数异常 (不能小于 1)
@@ -1059,9 +1093,9 @@ Comp_RS=function(N_all,p, R, Var.e, nloop, n, dist_x="case1", dist_a="N.ori",gro
 
 N=c(2500)
 modeltype="N.ori"
-result = Comp(N,p=50,R=20,Var.e=9,nloop=20,n=100,dist_x =filename, dist_a=modeltype,groupsize="large",obj.c=0.1)
+result = Comp(N,p=50,R=20,Var.e=9,nloop=50,n=100,dist_x =filename, dist_a=modeltype,groupsize="large",obj.c=0.1)
 
-result_RS = Comp_RS(N,p=50,R=20,Var.e=9,nloop=20,n=100,dist_x =filename, dist_a=modeltype,groupsize="large",obj.c=0.1)
+result_RS = Comp_RS(N,p=50,R=20,Var.e=9,nloop=50,n=100,dist_x =filename, dist_a=modeltype,groupsize="large",obj.c=0.1)
 
 result
 
