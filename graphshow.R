@@ -20,7 +20,7 @@ library(ClusterR)
 library(MASS)
 Rcpp::sourceCpp("lmm_fast.cpp")
 
-filename<-CASE<-"case2"
+filename<-CASE<-"case4"
 calculate_K <- function(p) {
   
   k_diag <- c(1, rep(1/3, p - 1))
@@ -849,7 +849,7 @@ Comp_RS=function(N_all,p, R, Var.e, nloop, n, dist_x="case1", dist_a="N.ori",gro
       
       
       
-      
+  
       
       ####################################################################################################
       
@@ -983,8 +983,8 @@ Comp_RS=function(N_all,p, R, Var.e, nloop, n, dist_x="case1", dist_a="N.ori",gro
       GALLRS.Est <- Est_hat_RS_cpp(xx=FXX.best, yy=FY.best, 
                                    beta, Var.a, Var.e, C.best, R.best, p)
       GALLRS.pred[,itr] <- MSPE_fn_RS(FY.test, FXX.test, FXX.best, FY.best, 
-                                      GALLRS.Est$beta2, GALLRS.Est$G.hat, GALLRS.Est$Var.e, 
-                                      C.best, centroids.best)
+                                GALLRS.Est$beta2, GALLRS.Est$G.hat, GALLRS.Est$Var.e, 
+                                C.best, centroids.best)
       GALLRS.bt.mat[,itr] <- GALLRS.Est[[1]]
       GALLRS.bt0.dif[,itr] <- GALLRS.Est[[4]]
       GALLRS.bt[,itr] <- GALLRS.Est[[5]]
@@ -995,7 +995,7 @@ Comp_RS=function(N_all,p, R, Var.e, nloop, n, dist_x="case1", dist_a="N.ori",gro
       
       ##############ALLL##############
       ALL.Est <- Est_hat_RS_cpp(xx=FXX.train, yy=FY.train, 
-                                beta, Var.a, Var.e, C.train, R, p)
+                             beta, Var.a, Var.e, C.train, R, p)
       ALL.pred[,itr] <- MSPE_tru_RS(FY.test, FXX.test, FXX.train, FY.train, 
                                     ALL.Est$beta2, ALL.Est$G.hat, ALL.Est$Var.e, 
                                     C.train, C.test, R)

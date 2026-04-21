@@ -428,7 +428,9 @@ Comp=function(N_all,p, R, Var.e, nloop, n, dist_x="case1", dist_a="N.ori",groups
       # 计算初始目标函数值 (避免重复调用 C++ 函数)
       info_res_curr <- count_info_cpp(FXXXX.curr, FYYY.curr, C.curr, R_CGOSS.curr, p)
       I.curr <- -sum(diag( solve( info_res_curr$Information) %*% K_mat ))  
-      obj.curr <- I.curr
+      D.curr<- info_res_curr$D
+      A.curr<- info_res_curr$A
+      obj.curr <- 0.7*log(D.curr)/p+0.3*log(A.curr/p)
       
       # 2. 初始化全局最优记录 (Global Best)
       obj.best <- obj.curr
@@ -470,8 +472,14 @@ Comp=function(N_all,p, R, Var.e, nloop, n, dist_x="case1", dist_a="N.ori",groups
         # 计算候选目标函数值 (同样提取出来避免重复调用)
         info_res_candi <- count_info_cpp(F.candi, Y.candi, C.candi, R.candi, p)
         I.candi <- -sum(diag( solve(info_res_candi$Information) %*% K_mat ))
+        D.candi<- info_res_candi$D
+        A.candi<- info_res_candi$A
+        obj.candi <- 0.7*log(D.candi)/p+0.3*log(A.candi/p)
         
-        obj.candi <- I.candi
+        
+        
+        
+        
         
         delta <- obj.candi - obj.curr
         print(delta)
@@ -644,7 +652,7 @@ Comp=function(N_all,p, R, Var.e, nloop, n, dist_x="case1", dist_a="N.ori",groups
   
   
   
-  #save(rec1, rec2, rec3, file = paste0(dist_a,"_", dist_x,"NEW.Rdata"))
+  save(rec1, rec2, rec3,rec4,rec5, file = paste0("fixedslope_", dist_x,".Rdata"))
   
   return(list(rec1,rec2,rec3,rec4,rec5))
 }
@@ -1082,7 +1090,7 @@ Comp_RS=function(N_all,p, R, Var.e, nloop, n, dist_x="case1", dist_a="N.ori",gro
   
   
   
-  #save(rec1, rec2, rec3, file = paste0(dist_a,"_", dist_x,"NEW.Rdata"))
+  save(rec1, rec2, rec3,rec4,rec5, file = paste0("randomslope_", dist_x,".Rdata"))
   
   return(list(rec1,rec2,rec3,rec4,rec5))
 }
