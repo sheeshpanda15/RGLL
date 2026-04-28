@@ -160,47 +160,183 @@ generate_groups <- function(R, m, N,V) {
   
   return(result)
 }
-mbky <- function(setseed, FXX, y, Cn, threshold = 2) {
-  # 1. 初始化 current_Cn
-  current_Cn <- Cn 
-  
+# ================================================================
+# supervised_kmy：残差增广聚类 + 保存组参数供软分配使用
+# ================================================================
+supervised_kmy <- function(setseed, FXX, FY, Cn,
+                            lambda    = 1.0,
+                            threshold = 2L) {
+  p          <- ncol(FXX)
+  current_Cn <- Cn
+  km_centers_X <- NULL
+  batchs       <- NULL
+  cluster_sizes <- NULL
+
+  # 1. OLS 残差增广
+  ols_resid    <- as.vector(residuals(lm(FY ~ FXX)))
+  resid_scaled <- scale(ols_resid) * lambda
+  FXX_aug      <- cbind(FXX, resid_scaled)   # N × (p+1)
+
   repeat {
-    if (current_Cn < 1) current_Cn <- 1
-    
-    # 2. 这里的 set.seed 会根据上面或下面更新的 setseed 重新生效
-    set.seed(setseed) 
-    mini_batch_kmeans <- ClusterR::MiniBatchKmeans(FXX, clusters = current_Cn, batch_size = 1024, 
-                                                   num_init = 3, max_iters = 5, 
-                                                   initializer = 'kmeans++')
-    
-    batchs <- ClusterR::predict_KMeans(FXX, mini_batch_kmeans$centroids)
+    if (current_Cn < 2L) current_Cn <- 2L
+
+    set.seed(setseed)
+    km <- ClusterR::MiniBatchKmeans(FXX_aug, clusters = current_Cn,
+                                    batch_size = 1024, num_init = 3,
+                                    max_iters = 5, initializer = "kmeans++")
+    batchs        <- ClusterR::predict_KMeans(FXX_aug, km$centroids)
     cluster_sizes <- table(batchs)
-    
-    # 检测是否所有簇的大小都满足阈值，或者已经降无可降
-    if (min(cluster_sizes) >= threshold || current_Cn == 1) {
-      break
-    } else {
-      # 如果不满足，聚类数减 1，改变种子以避免陷入相同的局部特征，重新聚类
-      current_Cn <- current_Cn - 1
-      setseed <- setseed + 1 
-    }
+    km_centers_X  <- km$centroids[, seq_len(p), drop = FALSE]  # 只保留X列
+
+    if (min(cluster_sizes) >= threshold) break
+    current_Cn <- current_Cn - 1L
+    setseed    <- setseed + 1L
   }
-  
-  R_CGOSS <- length(cluster_sizes)
+
+  R_now    <- length(cluster_sizes)
   sort_idx <- order(batchs)
-  
-  data_matrix_sorted <- FXX[sort_idx, , drop = FALSE]
-  sorted_y <- y[sort_idx]
-  sorted_indices <- (1:nrow(FXX))[sort_idx]
-  cluster_sizes_vector <- as.vector(table(batchs[sort_idx]))
-  
-  return(list(R_CGOSS = R_CGOSS, 
-              data_matrix_sorted = data_matrix_sorted, 
-              sorted_y = sorted_y, 
-              cluster_sizes_vector = cluster_sizes_vector, 
-              sorted_indices = sorted_indices,
-              centroids = mini_batch_kmeans$centroids,
-              final_Cn = current_Cn)) # 3. 把最新的聚类数传回给外面的主循环
+
+  # 2. 每组 X 的均值、协方差和先验概率，供软分配使用
+  group_params <- vector("list", R_now)
+  for (g in seq_len(R_now)) {
+    idx_g <- which(batchs == g)
+    Xg    <- FXX[idx_g, , drop = FALSE]
+    mu_g  <- colMeans(Xg)
+    Sigma_g <- if (nrow(Xg) > p + 1L) {
+      cov(Xg) + diag(1e-6, p)
+    } else {
+      diag(1.0, p)
+    }
+    group_params[[g]] <- list(mu    = mu_g,
+                              Sigma = Sigma_g,
+                              prior = nrow(Xg) / nrow(FXX))
+  }
+
+  return(list(
+    R_CGOSS              = R_now,
+    data_matrix_sorted   = FXX[sort_idx, , drop = FALSE],
+    sorted_y             = FY[sort_idx],
+    cluster_sizes_vector = as.vector(table(batchs[sort_idx])),
+    sorted_indices       = (1:nrow(FXX))[sort_idx],
+    centroids            = km_centers_X,
+    group_params         = group_params,
+    final_Cn             = current_Cn
+  ))
+}
+
+# ================================================================
+# soft_assign：给单个测试点计算属于各组的后验概率权重
+# ================================================================
+soft_assign <- function(x_new, group_params) {
+  log_probs <- sapply(group_params, function(par) {
+    log(par$prior + 1e-12) +
+      mvtnorm::dmvnorm(x_new, mean = par$mu,
+                       sigma = par$Sigma, log = TRUE)
+  })
+  log_probs <- log_probs - max(log_probs)   # 数值稳定
+  w <- exp(log_probs)
+  w / sum(w)
+}
+
+# ================================================================
+# MSPE_fn_soft：随机截距版预测，使用软分配
+# ================================================================
+MSPE_fn_soft <- function(fy_test, fx_test,
+                          sx_train, sy_train,
+                          beta_hat, Var.a, Var.e,
+                          nc_train, group_params) {
+  R <- length(nc_train)
+
+  # 训练集估计每组随机截距
+  mv_hat           <- numeric(R)
+  index            <- 1L
+  fixed_pred_train <- cbind(1, sx_train) %*% beta_hat
+  for (i in seq_len(R)) {
+    idx       <- index:(index + nc_train[i] - 1L)
+    res_i     <- sy_train[idx] - fixed_pred_train[idx]
+    mv_hat[i] <- (Var.a / (Var.e + nc_train[i] * Var.a)) * sum(res_i)
+    index     <- index + nc_train[i]
+  }
+
+  # 测试集软分配预测
+  n_test          <- nrow(fx_test)
+  fixed_pred_test <- cbind(1, fx_test) %*% beta_hat
+  y_hat           <- numeric(n_test)
+  for (j in seq_len(n_test)) {
+    w         <- soft_assign(as.numeric(fx_test[j, ]), group_params)
+    y_hat[j]  <- fixed_pred_test[j] + sum(w * mv_hat)
+  }
+
+  mean((fy_test - y_hat)^2)
+}
+
+# ================================================================
+# MSPE_fn_RS_soft：随机斜率版预测，使用软分配
+# ================================================================
+MSPE_fn_RS_soft <- function(fy_test, fx_test,
+                             sx_train, sy_train,
+                             beta_hat, G_hat, Var.e,
+                             nc_train, group_params) {
+  R            <- length(nc_train)
+  q            <- ncol(fx_test) + 1L
+  u_vecs       <- matrix(0, nrow = R, ncol = q)
+  X_train_full <- cbind(1, sx_train)
+  G_inv        <- solve(G_hat + diag(1e-7, q))
+  index        <- 1L
+
+  # 训练集估计每组随机斜率向量
+  for (i in seq_len(R)) {
+    idx         <- index:(index + nc_train[i] - 1L)
+    Xg          <- X_train_full[idx, , drop = FALSE]
+    yg          <- sy_train[idx]
+    res_g       <- yg - Xg %*% beta_hat
+    M           <- solve(Var.e * G_inv + crossprod(Xg))
+    u_vecs[i, ] <- M %*% (t(Xg) %*% res_g)
+    index       <- index + nc_train[i]
+  }
+
+  # 测试集软分配预测
+  n_test       <- nrow(fx_test)
+  X_test_full  <- cbind(1, fx_test)
+  y_hat        <- numeric(n_test)
+  for (j in seq_len(n_test)) {
+    w        <- soft_assign(as.numeric(fx_test[j, ]), group_params)
+    u_soft   <- colSums(w * u_vecs)   # q 维加权随机斜率
+    y_hat[j] <- sum(X_test_full[j, ] * (beta_hat + u_soft))
+  }
+
+  mean((fy_test - y_hat)^2)
+}
+
+kmy <- function(setseed, FXX, y, Cn, threshold = 2) {
+  current_Cn <- Cn
+  km_centers <- NULL
+
+  repeat {
+    if (current_Cn < 2) current_Cn <- 2
+
+    set.seed(setseed)
+    km            <- stats::kmeans(FXX, centers = current_Cn, nstart = 25, iter.max = 1000, algorithm = "Lloyd")
+    batchs        <- km$cluster
+    cluster_sizes <- table(batchs)
+    km_centers    <- km$centers
+
+    if (min(cluster_sizes) >= threshold) break
+    current_Cn <- current_Cn - 1
+    setseed    <- setseed + 1
+  }
+
+  sort_idx <- order(batchs)
+
+  return(list(
+    R_CGOSS              = length(cluster_sizes),
+    data_matrix_sorted   = FXX[sort_idx, , drop = FALSE],
+    sorted_y             = y[sort_idx],
+    cluster_sizes_vector = as.vector(table(batchs[sort_idx])),
+    sorted_indices       = (1:nrow(FXX))[sort_idx],
+    centroids            = km_centers,
+    final_Cn             = current_Cn
+  ))
 }
 findsubforCGOSS<-function(n,R){
   if (n %% R != 0) {
@@ -399,68 +535,51 @@ Comp=function(N,p, R_all, Var.e, nloop, n, dist_x="case1", dist_a="N.ori",groups
       
       ####################################################################################################
       
-      T.initial<-50
       K_mat <- calculate_K_dynamic(FXX.test)
       Cn=2
       time2.start<-Sys.time()
       ################### 标准 SA 初始化 (必须在循环外) ###################
-      # 1. 计算初始状态 (Current State)
-      cluster.curr <- mbky(setseed, FXX.train, FY.train, Cn)
-      R_CGOSS.curr <- cluster.curr$R_CGOSS
-      FXXXX.curr   <- cluster.curr$data_matrix_sorted
-      FYYY.curr    <- cluster.curr$sorted_y
-      C.curr       <- cluster.curr$cluster_sizes_vector
-      centroids.curr <- cluster.curr$centroids
-      # 计算初始目标函数值 (避免重复调用 C++ 函数)
+      cluster.curr      <- supervised_kmy(setseed, FXX.train, FY.train, Cn)
+      R_CGOSS.curr      <- cluster.curr$R_CGOSS
+      FXXXX.curr        <- cluster.curr$data_matrix_sorted
+      FYYY.curr         <- cluster.curr$sorted_y
+      C.curr            <- cluster.curr$cluster_sizes_vector
+      centroids.curr    <- cluster.curr$centroids
+      group_params.curr <- cluster.curr$group_params
       info_res_curr <- count_info_cpp(FXXXX.curr, FYYY.curr, C.curr, R_CGOSS.curr, p)
-      I.curr <- -sum(diag( solve( info_res_curr$Information) %*% K_mat ))  
-      D.curr<- info_res_curr$D
-      A.curr<- info_res_curr$A
-      obj.curr <- 0.7*log(D.curr)/p+0.3*log(A.curr/p)
-      
-      # 2. 初始化全局最优记录 (Global Best)
-      obj.best <- obj.curr
-      FXX.best <- FXXXX.curr
-      FY.best <- FYYY.curr  # 注意：这里你原本写的是 FY.bestM，但下面更新是 FY.best，建议统一命名为 FY.best
-      C.best   <- C.curr
-      R.best   <- R_CGOSS.curr
-      Cn.best  <- Cn
-      centroids.best <- centroids.curr
-      # 3. SA 参数设置
-      T.curr <- T.initial        
-      alpha  <- 0.95            
-      iter   <- 0
-      max_iter <- 50           
+      D.curr   <- info_res_curr$D
+      A.curr   <- info_res_curr$A
+      obj.curr <- 0.7*log(D.curr)/p + 0.3*log(A.curr/p)
+      obj.best          <- obj.curr
+      FXX.best          <- FXXXX.curr
+      FY.best           <- FYYY.curr
+      C.best            <- C.curr
+      R.best            <- R_CGOSS.curr
+      Cn.best           <- cluster.curr$final_Cn
+      centroids.best    <- centroids.curr
+      group_params.best <- group_params.curr
+      T.curr   <- 500
+      alpha    <- 0.97
+      iter     <- 0
+      max_iter <- 50
       
       ################### SA 主循环 ###################
       repeat {
         iter <- iter + 1
         if (T.curr < 1e-4 || iter > max_iter) break 
         
-        # 修正步长逻辑：允许加 1 或减 1 的随机游走
-        step <- sample(c(-1,1, 2), 1) 
-        Cn.candi <- Cn + step
-        
-        # 防止聚类数异常 (不能小于 1)
-        if (Cn.candi < 1) Cn.candi <- 1
-        # 如果因为小于 1 被拉回导致 Cn.candi 等于 Cn，强制让它向右走
-        if (Cn.candi == Cn) { 
-          Cn.candi <- Cn + 1 
-        }
-        
-        cluster.candi <- mbky(setseed + iter, FXX.train, FY.train, Cn.candi)
-        
+        set.seed(setseed + iter * 7)
+        step     <- sample(c(-3, -2, -1, 1, 2, 3), 1)
+        Cn.candi <- max(2, Cn + step)
+        cluster.candi <- supervised_kmy(setseed + iter, FXX.train, FY.train, Cn.candi)
         R.candi <- cluster.candi$R_CGOSS
         F.candi <- cluster.candi$data_matrix_sorted
         Y.candi <- cluster.candi$sorted_y
         C.candi <- cluster.candi$cluster_sizes_vector
-        
-        # 计算候选目标函数值 (同样提取出来避免重复调用)
         info_res_candi <- count_info_cpp(F.candi, Y.candi, C.candi, R.candi, p)
-        I.candi <- -sum(diag( solve(info_res_candi$Information) %*% K_mat ))
-        D.candi<- info_res_candi$D
-        A.candi<- info_res_candi$A
-        obj.candi <- 0.7*log(D.candi)/p+0.3*log(A.candi/p)
+        D.candi   <- info_res_candi$D
+        A.candi   <- info_res_candi$A
+        obj.candi <- 0.7*log(D.candi)/p + 0.3*log(A.candi/p)
         
         
         
@@ -488,7 +607,8 @@ Comp=function(N,p, R_all, Var.e, nloop, n, dist_x="case1", dist_a="N.ori",groups
           FYYY.curr    <- Y.candi      # 新增补全
           C.curr       <- C.candi      # 新增补全
           R_CGOSS.curr <- R.candi      # 新增补全
-          centroids.curr <- cluster.candi$centroids
+          centroids.curr    <- cluster.candi$centroids
+          group_params.curr <- cluster.candi$group_params
           if (obj.candi > obj.best) {
             obj.best <- obj.candi
             FXX.best <- F.candi
@@ -496,7 +616,8 @@ Comp=function(N,p, R_all, Var.e, nloop, n, dist_x="case1", dist_a="N.ori",groups
             C.best   <- C.candi
             R.best   <- R.candi
             Cn.best  <- Cn.candi
-            centroids.best <- centroids.curr
+            centroids.best    <- centroids.curr
+            group_params.best <- group_params.curr
           }
         }
         
@@ -506,7 +627,8 @@ Comp=function(N,p, R_all, Var.e, nloop, n, dist_x="case1", dist_a="N.ori",groups
         T.curr <- T.curr * alpha
         
         # 可选：打印进度
-        cat(sprintf("Iter: %d, T: %.4f, Cn: %d, Obj: %.4f, Best: %.4f\n", iter, T.curr, Cn, obj.curr, obj.best))
+        cat(sprintf("Iter: %d, T: %.4f, Cn: %d, Obj: %.4f, Best: %.4f, Cn.best: %d\n",
+                    iter, T.curr, Cn, obj.curr, obj.best, Cn.best))
       }
       
       meanR <- meanR + R.best
@@ -523,9 +645,9 @@ Comp=function(N,p, R_all, Var.e, nloop, n, dist_x="case1", dist_a="N.ori",groups
       
       GALL.Est <- Est_hat_cpp(xx=FXX.best, yy=FY.best, 
                               beta, Var.a, Var.e, C.best, R.best, p)
-      GALL.pred[,itr] <- MSPE_fn(FY.test, FXX.test, FXX.best, FY.best, 
-                                 GALL.Est[[5]], GALL.Est[[6]], GALL.Est[[7]], 
-                                 C.best, centroids.best)
+      GALL.pred[,itr] <- MSPE_fn_soft(FY.test, FXX.test, FXX.best, FY.best,
+                                   GALL.Est[[5]], GALL.Est[[6]], GALL.Est[[7]],
+                                   C.best, group_params.best)
       GALL.bt.mat[,itr] <- GALL.Est[[1]]
       GALL.bt0.dif[,itr] <- GALL.Est[[4]]
       GALL.bt[,itr] <- GALL.Est[[5]]
@@ -534,9 +656,9 @@ Comp=function(N,p, R_all, Var.e, nloop, n, dist_x="case1", dist_a="N.ori",groups
       ##############GALLLRS##############
       GALLRS.Est <- Est_hat_RS_cpp(xx=FXX.best, yy=FY.best, 
                                    beta, Var.a, Var.e, C.best, R.best, p)
-      GALLRS.pred[,itr] <- MSPE_fn_RS(FY.test, FXX.test, FXX.best, FY.best, 
-                                      GALLRS.Est$beta2, GALLRS.Est$G.hat, GALLRS.Est$Var.e, 
-                                      C.best, centroids.best)
+      GALLRS.pred[,itr] <- MSPE_fn_RS_soft(FY.test, FXX.test, FXX.best, FY.best,
+                                        GALLRS.Est$beta2, GALLRS.Est$G.hat, GALLRS.Est$Var.e,
+                                        C.best, group_params.best)
       GALLRS.bt.mat[,itr] <- GALLRS.Est[[1]]
       GALLRS.bt0.dif[,itr] <- GALLRS.Est[[4]]
       GALLRS.bt[,itr] <- GALLRS.Est[[5]]
@@ -642,6 +764,7 @@ Comp=function(N,p, R_all, Var.e, nloop, n, dist_x="case1", dist_a="N.ori",groups
   
   return(list(rec1,rec2,rec3,rec4,rec5))
 }
+
 ##################################
 Comp_RS=function(N,p, R_all, Var.e, nloop, n, dist_x="case1", dist_a="N.ori",groupsize,obj.c=0.5){
   big_column_vector<-c()
@@ -838,68 +961,51 @@ Comp_RS=function(N,p, R_all, Var.e, nloop, n, dist_x="case1", dist_a="N.ori",gro
       
       ####################################################################################################
       
-      T.initial<-50
-      Cn=2
       K_mat <- calculate_K_dynamic(FXX.test)
+      Cn=2
       time2.start<-Sys.time()
       ################### 标准 SA 初始化 (必须在循环外) ###################
-      # 1. 计算初始状态 (Current State)
-      cluster.curr <- mbky(setseed, FXX.train, FY.train, Cn)
-      R_CGOSS.curr <- cluster.curr$R_CGOSS
-      FXXXX.curr   <- cluster.curr$data_matrix_sorted
-      FYYY.curr    <- cluster.curr$sorted_y
-      C.curr       <- cluster.curr$cluster_sizes_vector
-      centroids.curr <- cluster.curr$centroids
-      # 计算初始目标函数值 (避免重复调用 C++ 函数)
+      cluster.curr      <- supervised_kmy(setseed, FXX.train, FY.train, Cn)
+      R_CGOSS.curr      <- cluster.curr$R_CGOSS
+      FXXXX.curr        <- cluster.curr$data_matrix_sorted
+      FYYY.curr         <- cluster.curr$sorted_y
+      C.curr            <- cluster.curr$cluster_sizes_vector
+      centroids.curr    <- cluster.curr$centroids
+      group_params.curr <- cluster.curr$group_params
       info_res_curr <- count_info_cpp(FXXXX.curr, FYYY.curr, C.curr, R_CGOSS.curr, p)
-      I.curr <- -sum(diag( solve( info_res_curr$Information) %*% K_mat ))  
-      D.curr<- info_res_curr$D
-      A.curr<- info_res_curr$A
-      obj.curr <- 0.7*log(D.curr)/p+0.3*log(A.curr/p)
-      
-      # 2. 初始化全局最优记录 (Global Best)
-      obj.best <- obj.curr
-      FXX.best <- FXXXX.curr
-      FY.best <- FYYY.curr  # 注意：这里你原本写的是 FY.bestM，但下面更新是 FY.best，建议统一命名为 FY.best
-      C.best   <- C.curr
-      R.best   <- R_CGOSS.curr
-      Cn.best  <- Cn
-      centroids.best <- centroids.curr
-      # 3. SA 参数设置
-      T.curr <- T.initial        
-      alpha  <- 0.95            
-      iter   <- 0
-      max_iter <- 50           
+      D.curr   <- info_res_curr$D
+      A.curr   <- info_res_curr$A
+      obj.curr <- 0.7*log(D.curr)/p + 0.3*log(A.curr/p)
+      obj.best          <- obj.curr
+      FXX.best          <- FXXXX.curr
+      FY.best           <- FYYY.curr
+      C.best            <- C.curr
+      R.best            <- R_CGOSS.curr
+      Cn.best           <- cluster.curr$final_Cn
+      centroids.best    <- centroids.curr
+      group_params.best <- group_params.curr
+      T.curr   <- 500
+      alpha    <- 0.97
+      iter     <- 0
+      max_iter <- 50
       
       ################### SA 主循环 ###################
       repeat {
         iter <- iter + 1
         if (T.curr < 1e-4 || iter > max_iter) break 
         
-        # 修正步长逻辑：允许加 1 或减 1 的随机游走
-        step <- sample(c(-1,1, 2), 1) 
-        Cn.candi <- Cn + step
-        
-        # 防止聚类数异常 (不能小于 1)
-        if (Cn.candi < 1) Cn.candi <- 1
-        # 如果因为小于 1 被拉回导致 Cn.candi 等于 Cn，强制让它向右走
-        if (Cn.candi == Cn) { 
-          Cn.candi <- Cn + 1 
-        }
-        
-        cluster.candi <- mbky(setseed + iter, FXX.train, FY.train, Cn.candi)
-        
+        set.seed(setseed + iter * 7)
+        step     <- sample(c(-3, -2, -1, 1, 2, 3), 1)
+        Cn.candi <- max(2, Cn + step)
+        cluster.candi <- supervised_kmy(setseed + iter, FXX.train, FY.train, Cn.candi)
         R.candi <- cluster.candi$R_CGOSS
         F.candi <- cluster.candi$data_matrix_sorted
         Y.candi <- cluster.candi$sorted_y
         C.candi <- cluster.candi$cluster_sizes_vector
-        
-        # 计算候选目标函数值 (同样提取出来避免重复调用)
         info_res_candi <- count_info_cpp(F.candi, Y.candi, C.candi, R.candi, p)
-        I.candi <- -sum(diag( solve(info_res_candi$Information) %*% K_mat ))
-        D.candi<- info_res_candi$D
-        A.candi<- info_res_candi$A
-        obj.candi <- 0.7*log(D.candi)/p+0.3*log(A.candi/p)
+        D.candi   <- info_res_candi$D
+        A.candi   <- info_res_candi$A
+        obj.candi <- 0.7*log(D.candi)/p + 0.3*log(A.candi/p)
         
         
         delta <- obj.candi - obj.curr
@@ -923,7 +1029,8 @@ Comp_RS=function(N,p, R_all, Var.e, nloop, n, dist_x="case1", dist_a="N.ori",gro
           FYYY.curr    <- Y.candi      # 新增补全
           C.curr       <- C.candi      # 新增补全
           R_CGOSS.curr <- R.candi      # 新增补全
-          centroids.curr <- cluster.candi$centroids
+          centroids.curr    <- cluster.candi$centroids
+          group_params.curr <- cluster.candi$group_params
           if (obj.candi > obj.best) {
             obj.best <- obj.candi
             FXX.best <- F.candi
@@ -931,7 +1038,8 @@ Comp_RS=function(N,p, R_all, Var.e, nloop, n, dist_x="case1", dist_a="N.ori",gro
             C.best   <- C.candi
             R.best   <- R.candi
             Cn.best  <- Cn.candi
-            centroids.best <- centroids.curr
+            centroids.best    <- centroids.curr
+            group_params.best <- group_params.curr
           }
         }
         
@@ -957,9 +1065,9 @@ Comp_RS=function(N,p, R_all, Var.e, nloop, n, dist_x="case1", dist_a="N.ori",gro
       
       GALL.Est <- Est_hat_cpp(xx=FXX.best, yy=FY.best, 
                               beta, Var.a, Var.e, C.best, R.best, p)
-      GALL.pred[,itr] <- MSPE_fn(FY.test, FXX.test, FXX.best, FY.best, 
-                                 GALL.Est[[5]], GALL.Est[[6]], GALL.Est[[7]], 
-                                 C.best, centroids.best)
+      GALL.pred[,itr] <- MSPE_fn_soft(FY.test, FXX.test, FXX.best, FY.best,
+                                   GALL.Est[[5]], GALL.Est[[6]], GALL.Est[[7]],
+                                   C.best, group_params.best)
       GALL.bt.mat[,itr] <- GALL.Est[[1]]
       GALL.bt0.dif[,itr] <- GALL.Est[[4]]
       GALL.bt[,itr] <- GALL.Est[[5]]
@@ -971,9 +1079,9 @@ Comp_RS=function(N,p, R_all, Var.e, nloop, n, dist_x="case1", dist_a="N.ori",gro
       ##############GALLLRS##############
       GALLRS.Est <- Est_hat_RS_cpp(xx=FXX.best, yy=FY.best, 
                                    beta, Var.a, Var.e, C.best, R.best, p)
-      GALLRS.pred[,itr] <- MSPE_fn_RS(FY.test, FXX.test, FXX.best, FY.best, 
-                                      GALLRS.Est$beta2, GALLRS.Est$G.hat, GALLRS.Est$Var.e, 
-                                      C.best, centroids.best)
+      GALLRS.pred[,itr] <- MSPE_fn_RS_soft(FY.test, FXX.test, FXX.best, FY.best,
+                                        GALLRS.Est$beta2, GALLRS.Est$G.hat, GALLRS.Est$Var.e,
+                                        C.best, group_params.best)
       GALLRS.bt.mat[,itr] <- GALLRS.Est[[1]]
       GALLRS.bt0.dif[,itr] <- GALLRS.Est[[4]]
       GALLRS.bt[,itr] <- GALLRS.Est[[5]]
@@ -1095,8 +1203,8 @@ result = Comp(N,p=50,R_all,Var.e=9,nloop=50,n=100,dist_x =filename, dist_a=model
 
 result_RS = Comp_RS(N,p=50,R_all,Var.e=9,nloop=50,n=100,dist_x =filename, dist_a=modeltype,groupsize="large",obj.c=0.1)
 
-
 result
+
 result_RS
 
 
