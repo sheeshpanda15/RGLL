@@ -1,0 +1,15 @@
+Hello, World! From erc-hpc-vm-pkmewn
+Lmod has detected the following error: The following module(s) are unknown:
+"r/4.3.0-gcc-13.2.0-withx-rmath-standalone-python-3.11.6"
+
+Please check the spelling or version number. Also try "module spider ..."
+It is also possible your cache file is out-of-date; it may help to try:
+  $ module --ignore_cache load
+"r/4.3.0-gcc-13.2.0-withx-rmath-standalone-python-3.11.6"
+
+Also make sure that all modulefiles written in TCL start with the string
+#%Module
+
+
+
+/var/lib/slurm/slurmd/job33610256/slurm_script: line 21: Rscript: command not found
