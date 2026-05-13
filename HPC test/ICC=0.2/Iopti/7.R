@@ -164,7 +164,7 @@ generate_groups <- function(R, m, N,V) {
 # supervised_kmy：残差增广聚类 + 保存组参数供软分配使用
 # ================================================================
 supervised_kmy <- function(setseed, FXX, FY, Cn,
-                            lambda    = 0.2,
+                            lambda    = 0.5,
                             threshold = 2L) {
   p          <- ncol(FXX)
   current_Cn <- Cn
@@ -562,7 +562,7 @@ Comp=function(N,p, R_all, Var.e, nloop, n, dist_x="case1", dist_a="N.ori",groups
       T.curr   <- 500
       alpha    <- 0.97
       iter     <- 0
-      max_iter <- 50
+      max_iter <- 20
       
       ################### SA 主循环 ###################
       repeat {

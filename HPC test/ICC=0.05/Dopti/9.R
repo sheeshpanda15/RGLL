@@ -164,7 +164,7 @@ generate_groups <- function(R, m, N,V) {
 # supervised_kmy：残差增广聚类 + 保存组参数供软分配使用
 # ================================================================
 supervised_kmy <- function(setseed, FXX, FY, Cn,
-                            lambda    = 1.0,
+                            lambda    = 0.2,
                             threshold = 2L) {
   p          <- ncol(FXX)
   current_Cn <- Cn
