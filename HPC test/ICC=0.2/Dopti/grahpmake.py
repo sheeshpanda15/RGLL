@@ -15,7 +15,7 @@ for slope_type in ['fixedslope', 'randomslope']:
     fig.suptitle(f'MSPE — {slope_type}', fontsize=16, fontweight='bold', y=0.98)
 
     for case_idx in range(1, 10):
-        fname = f'/Users/sheesh/Desktop/phd/RGLL_Clone/HPC test/ICC=0.05/Iopti/{slope_type}_case{case_idx}.Rdata'
+        fname = f'/Users/sheesh/Desktop/phd/RGLL_Clone/HPC test/ICC=0.2/Dopti/{slope_type}_case{case_idx}.Rdata'
         df = load_mspe(fname)
         ax = axes[(case_idx - 1) // 3][(case_idx - 1) % 3]
 

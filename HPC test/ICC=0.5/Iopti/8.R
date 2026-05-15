@@ -917,7 +917,7 @@ Comp_RS=function(N,p, R_all, Var.e, nloop, n, dist_x="case1", dist_a="N.ori",gro
       
       
       
-      sigma.a <- 2.25              # 随机截距标准差
+      sigma.a <- 9              # 随机截距标准差
       sigma.b <- 0.1            # 随机斜率标准差
       sigma.e <- 9              # 误差标准差
       
