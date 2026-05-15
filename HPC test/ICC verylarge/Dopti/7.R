@@ -467,16 +467,16 @@ Comp=function(N,p, R_all, Var.e, nloop, n, dist_x="case1", dist_a="N.ori",groups
         
         if(dist_x=="case5") {
           FXX.train[(SC.train[i] + 1):(SC.train[i+1]), ] =
-            matrix(rt(C.train[i] * p, df = 3), C.train[i], p)
+            matrix(rt(C.train[i] * p, df = 10), C.train[i], p)
           FXX.test[(SC.test[i] + 1):(SC.test[i+1]), ] =
-            matrix(rt(C.test[i] * p, df = 3), C.test[i], p)
+            matrix(rt(C.test[i] * p, df = 10), C.test[i], p)
         }
         
         if(dist_x=="case6") {
           FXX.train[(SC.train[i] + 1):(SC.train[i+1]), ] =
-            matrix(rlnorm(C.train[i] * p, meanlog = 0, sdlog = 1), C.train[i], p)
+            matrix(rlnorm(C.train[i] * p, meanlog = 0, sdlog = 0.2), C.train[i], p)
           FXX.test[(SC.test[i] + 1):(SC.test[i+1]), ] =
-            matrix(rlnorm(C.test[i] * p, meanlog = 0, sdlog = 1), C.test[i], p)
+            matrix(rlnorm(C.test[i] * p, meanlog = 0, sdlog = 0.2), C.test[i], p)
         }
         
         if(dist_x=="case7") {
@@ -852,16 +852,16 @@ Comp_RS=function(N,p, R_all, Var.e, nloop, n, dist_x="case1", dist_a="N.ori",gro
         
         if(dist_x=="case5") {
           FXX.train[(SC.train[i] + 1):(SC.train[i+1]), ] =
-            matrix(rt(C.train[i] * p, df = 3), C.train[i], p)
+            matrix(rt(C.train[i] * p, df = 10), C.train[i], p)
           FXX.test[(SC.test[i] + 1):(SC.test[i+1]), ] =
-            matrix(rt(C.test[i] * p, df = 3), C.test[i], p)
+            matrix(rt(C.test[i] * p, df = 10), C.test[i], p)
         }
         
         if(dist_x=="case6") {
           FXX.train[(SC.train[i] + 1):(SC.train[i+1]), ] =
-            matrix(rlnorm(C.train[i] * p, meanlog = 0, sdlog = 1), C.train[i], p)
+            matrix(rlnorm(C.train[i] * p, meanlog = 0, sdlog = 0.2), C.train[i], p)
           FXX.test[(SC.test[i] + 1):(SC.test[i+1]), ] =
-            matrix(rlnorm(C.test[i] * p, meanlog = 0, sdlog = 1), C.test[i], p)
+            matrix(rlnorm(C.test[i] * p, meanlog = 0, sdlog = 0.2), C.test[i], p)
         }
         
         if(dist_x=="case7") {
