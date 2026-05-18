@@ -419,8 +419,8 @@ Comp=function(N,p, R_all, Var.e, nloop, n, dist_x="case1", dist_a="N.ori",groups
       if (k%/%100 == k/100) cat(k, "-")
       itr <- itr+1
       set.seed(k* 100000)
-      if(dist_a == "N.ori") {var.a =9; Fa.test = rep(rnorm(R, mean = 0, sd = sqrt(Var.a)), C.test)
-      var.a =9; Fa.train = rep(rnorm(R, mean = 0, sd = sqrt(Var.a)), C.train)
+      if(dist_a == "N.ori") {Var.a =9; Fa.test = rep(rnorm(R, mean = 0, sd = sqrt(Var.a)), C.test)
+      Var.a =9; Fa.train = rep(rnorm(R, mean = 0, sd = sqrt(Var.a)), C.train)
       }
       if(dist_a == "N.ML") { Var.a <- 0; Fa.train<-Fa.test <- 0 }
       if(dist_a=="T"){Var.a = 3;Fa.test = rep(rt(R,3), C.test)
@@ -804,8 +804,8 @@ Comp_RS=function(N,p, R_all, Var.e, nloop, n, dist_x="case1", dist_a="N.ori",gro
       if (k%/%100 == k/100) cat(k, "-")
       itr <- itr+1
       set.seed(k* 100000)
-      if(dist_a == "N.ori") {var.a =9; Fa.test = rep(rnorm(R, mean = 0, sd = sqrt(Var.a)), C.test)
-      var.a =9; Fa.train = rep(rnorm(R, mean = 0, sd = sqrt(Var.a)), C.train)
+      if(dist_a == "N.ori") {Var.a =9; Fa.test = rep(rnorm(R, mean = 0, sd = sqrt(Var.a)), C.test)
+      Var.a =9; Fa.train = rep(rnorm(R, mean = 0, sd = sqrt(Var.a)), C.train)
       }
       if(dist_a == "N.ML") { Var.a <- 0; Fa.train<-Fa.test <- 0 }
       if(dist_a=="T"){Var.a = 3;Fa.test = rep(rt(R,3), C.test)
