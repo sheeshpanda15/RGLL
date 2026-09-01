@@ -15,7 +15,7 @@ for slope_type in ['fixedslope', 'randomslope']:
     fig.suptitle(f'MSPE — {slope_type}', fontsize=16, fontweight='bold', y=0.98)
 
     for case_idx in range(1, 10):
-        fname = f'/Users/sheesh/Desktop/phd/RGLL_Clone/HPC test/ICC=0.05/Iopti/{slope_type}_case{case_idx}.Rdata'
+        fname = f'C:\\Users\\sheesh\\Desktop\\RGLL\\HPC test\\ICC=0.5\\Iopti\\{slope_type}_case{case_idx}.Rdata'
         df = load_mspe(fname)
         ax = axes[(case_idx - 1) // 3][(case_idx - 1) % 3]
 
@@ -39,5 +39,5 @@ for slope_type in ['fixedslope', 'randomslope']:
                title='Method', title_fontsize=11)
 
     plt.tight_layout(rect=[0, 0.05, 1, 0.97])
-    plt.savefig(f'MSPE_{slope_type}.png', dpi=150, bbox_inches='tight')
+    plt.savefig(f'C:\\Users\\sheesh\\Desktop\\RGLL\\HPC test\\ICC=0.5\\Iopti\\MSPE_{slope_type}.png', dpi=150, bbox_inches='tight')
     plt.close()

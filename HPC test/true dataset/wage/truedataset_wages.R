@@ -502,10 +502,10 @@ Comp=function(dataset,obj.c=0.5){
       # 计算初始目标函数值 (避免重复调用 C++ 函数)
       info_res_curr <- count_info_rs_cpp(FXXXX.curr, FYYY.curr, C.curr, R_CGOSS.curr, p)
       I.curr <- -sum(diag( solve( info_res_curr$Information) %*% K_mat ))  
-      D.curr<- info_res_curr$D
-      A.curr<- info_res_curr$A
-      obj.curr <- 0.7*log(D.curr)/p+0.3*log(A.curr/p)
-      #obj.curr <- I.curr
+      #D.curr<- info_res_curr$D
+      #A.curr<- info_res_curr$A
+      #obj.curr <- 0.7*log(D.curr)/p+0.3*log(A.curr/p)
+      obj.curr <- I.curr
       
       # 2. 初始化全局最优记录 (Global Best)
       obj.best          <- obj.curr
@@ -554,10 +554,10 @@ Comp=function(dataset,obj.c=0.5){
         info_res_candi <- count_info_rs_cpp(F.candi, Y.candi, C.candi, R.candi, p)
         
         # 目标函数：I-optimality 或 DA-optimality，二选一取消注释
-        #obj.candi <- -sum(diag(solve(info_res_candi$Information) %*% K_mat))  # I-optimality
-         D.candi <- info_res_candi$D
-         A.candi <- info_res_candi$A
-         obj.candi <- 0.7 * log(D.candi) / p + 0.3 * log(A.candi / p)       # DA-optimality
+        obj.candi <- -sum(diag(solve(info_res_candi$Information) %*% K_mat))  # I-optimality
+        # D.candi <- info_res_candi$D
+        # A.candi <- info_res_candi$A
+        # obj.candi <- 0.7 * log(D.candi) / p + 0.3 * log(A.candi / p)       # DA-optimality
         
         delta  <- obj.candi - obj.curr
         print(delta)
@@ -752,64 +752,196 @@ X_train <- X[train_global, ]
 X_test  <- X[test_global,  ]
 y_train <- y[train_global]
 y_test  <- y[test_global]
+# ================================================================
+# 替换原有的 make_group_data，支持单列或多列组合分组
+# 用法与原函数完全兼容：
+#   单列：make_group_data_multi("R0214700")
+#   多列：make_group_data_multi(c("R0214700", "R8496500"))
+# ================================================================
 
-# ── 分组函数 ───────────────────────────────────────────────
-make_group_data <- function(group_col) {
-  # 动态排除分组列
-  col_idx <- which(colnames(X_train) == group_col)
-  if (length(col_idx) > 0) {
-    X_tr <- X_train[, -col_idx, drop = FALSE]
-    X_te <- X_test[,  -col_idx, drop = FALSE]
+make_group_data_multi <- function(group_cols,
+                                  min_train = 2L,
+                                  min_test  = 1L) {
+  
+  # ── 1. 构造组合标签（单列时退化为原始行为）─────────────────
+  if (length(group_cols) == 1L) {
+    raw_label_train <- as.character(dat[[group_cols]][train_global])
+    raw_label_test  <- as.character(dat[[group_cols]][test_global])
   } else {
-    X_tr <- X_train
-    X_te <- X_test
+    # 多列：paste 拼接，例如 "1_2"、"1_3" ...
+    raw_label_train <- do.call(paste, c(
+      lapply(group_cols, function(col) as.character(dat[[col]][train_global])),
+      sep = "_"
+    ))
+    raw_label_test  <- do.call(paste, c(
+      lapply(group_cols, function(col) as.character(dat[[col]][test_global])),
+      sep = "_"
+    ))
+  }
+  
+  # ── 2. 迭代过滤：保证 train 每组 >= min_train，test 每组 >= min_test
+  #       且两侧的组标签完全匹配（train 有的 test 也有，反之亦然）
+  keep_train <- rep(TRUE, length(train_global))
+  keep_test  <- rep(TRUE, length(test_global))
+  
+  repeat {
+    lbl_tr <- raw_label_train[keep_train]
+    lbl_te <- raw_label_test[keep_test]
+    
+    valid_tr   <- names(which(table(lbl_tr) >= min_train))
+    valid_te   <- names(which(table(lbl_te) >= min_test))
+    valid_both <- intersect(valid_tr, valid_te)
+    
+    new_keep_train <- keep_train
+    new_keep_test  <- keep_test
+    new_keep_train[keep_train]  <- lbl_tr %in% valid_both
+    new_keep_test[keep_test]    <- lbl_te %in% valid_both
+    
+    if (identical(new_keep_train, keep_train) &&
+        identical(new_keep_test,  keep_test)) break
+    
+    keep_train <- new_keep_train
+    keep_test  <- new_keep_test
+  }
+  
+  # 过滤后的索引
+  idx_train <- train_global[keep_train]
+  idx_test  <- test_global[keep_test]
+  lbl_tr    <- raw_label_train[keep_train]
+  lbl_te    <- raw_label_test[keep_test]
+  
+  # ── 3. 动态排除分组列（从 X 中去掉参与分组的列）─────────────
+  drop_idx <- which(colnames(X_train) %in% group_cols)
+  if (length(drop_idx) > 0) {
+    X_tr <- X[idx_train, -drop_idx, drop = FALSE]
+    X_te <- X[idx_test,  -drop_idx, drop = FALSE]
+  } else {
+    X_tr <- X[idx_train, , drop = FALSE]
+    X_te <- X[idx_test,  , drop = FALSE]
   }
   p_use <- ncol(X_tr)
   
-  # train 按组排序
-  g_train   <- as.integer(as.factor(dat[[group_col]][train_global]))
+  # ── 4. 按组标签排序 ───────────────────────────────────────
+  g_train   <- as.integer(as.factor(lbl_tr))
   ord_train <- order(g_train)
   g_train_s <- g_train[ord_train]
   
-  # test 按组排序（供 MSPE_tru_RS 使用）
-  g_test    <- as.integer(as.factor(dat[[group_col]][test_global]))
+  g_test    <- as.integer(as.factor(lbl_te))
   ord_test  <- order(g_test)
   g_test_s  <- g_test[ord_test]
   
+  y_tr <- y[idx_train]
+  y_te <- y[idx_test]
+  
+  # ── 5. 返回与原函数完全相同的结构 ────────────────────────
   list(
-    FXX.train = X_tr[ord_train, ],
-    FY.train  = as.matrix(y_train[ord_train]),
-    nc.train  = as.integer(table(g_train_s)),
-    FXX.test  = X_te[ord_test, ],
-    FY.test   = as.matrix(y_test[ord_test]),
-    nc.test   = as.integer(table(g_test_s)),
-    R = length(unique(g_train_s)),
-    p = p_use   # ← 用动态p，不是全局p
+    FXX.train  = X_tr[ord_train, , drop = FALSE],
+    FY.train   = as.matrix(y_tr[ord_train]),
+    nc.train   = as.integer(table(g_train_s)),
+    FXX.test   = X_te[ord_test,  , drop = FALSE],
+    FY.test    = as.matrix(y_te[ord_test]),
+    nc.test    = as.integer(table(g_test_s)),
+    R          = length(unique(g_train_s)),
+    p          = p_use,
+    group_cols = group_cols,          # 记录用了哪些列（方便调试）
+    group_labels = sort(unique(lbl_tr)) # 记录实际存在的组标签
   )
 }
 
-# ── 六种分组方案 ───────────────────────────────────────────
-d_race   <- make_group_data("R0214700")   # 种族,   3组
-d_region <- make_group_data("R8496500")   # 地区,   4组
-d_worker <- make_group_data("R7898500")   # 雇主,   5组
-d_urban  <- make_group_data("R8498600")   # 城乡,   3组
-d_edu    <- make_group_data("R8497000")   # 教育,  ~18组
 
-cat("=== 分组信息 ===\n")
-for (name in c("d_race","d_region","d_worker","d_urban","d_edu")) {
-  d <- get(name)
-  cat(sprintf("%-10s R=%-3d p=%-3d Train=%-5d Test=%-5d train组大小[%d-%d] test组大小[%d-%d]\n",
-              name, d$R, d$p, sum(d$nc.train), sum(d$nc.test),
-              min(d$nc.train), max(d$nc.train),
-              min(d$nc.test),  max(d$nc.test)))
+# ================================================================
+# 打印分组信息的辅助函数（兼容新旧两种）
+# ================================================================
+print_group_info <- function(name, d) {
+  cat(sprintf(
+    "%-25s R=%-4d p=%-4d Train=%-6d Test=%-6d train组大小[%d-%d] test组大小[%d-%d]\n",
+    name, d$R, d$p,
+    sum(d$nc.train), sum(d$nc.test),
+    min(d$nc.train),  max(d$nc.train),
+    min(d$nc.test),   max(d$nc.test)
+  ))
 }
 
 
+# ================================================================
+# 使用示例（替换原来第 791-805 行）
+# ================================================================
+
+# ── 原有单列分组（用法不变）──────────────────────────────────
+d_race   <- make_group_data_multi("R0214700")          # 种族,    3 组
+d_region <- make_group_data_multi("R8496500")          # 地区,    4 组
+d_worker <- make_group_data_multi("R7898500")          # 雇主,    5 组
+d_urban  <- make_group_data_multi("R8498600")          # 城乡,    3 组
+d_edu    <- make_group_data_multi("R8497000")          # 教育,  ~18 组
+
+# ── 新增多列组合分组 ─────────────────────────────────────────
+d_race_region  <- make_group_data_multi(c("R0214700", "R8496500"))          # 种族×地区,  最多 3×4=12 组
+d_race_urban   <- make_group_data_multi(c("R0214700", "R8498600"))          # 种族×城乡,  最多 3×3=9  组
+d_region_urban <- make_group_data_multi(c("R8496500", "R8498600"))          # 地区×城乡,  最多 4×3=12 组
+d_edu_region   <- make_group_data_multi(c("R8497000", "R8496500"))          # 教育×地区,  最多 18×4  组
+d_race_edu     <- make_group_data_multi(c("R0214700", "R8497000"))          # 种族×教育,  最多 3×18  组
+
+# 三列组合（组数较多，需确认每组样本量足够）
+d_race_region_urban <- make_group_data_multi(c("R0214700", "R8496500", "R8498600"))  # 最多 3×4×3=36 组
 
 
-result = Comp(d_edu,obj.c=0.1)
+# ================================================================
+# 打印所有分组信息
+# ================================================================
+cat("=== 分组信息 ===\n")
+all_datasets <- list(
+  # 单列
+  d_race         = d_race,
+  d_region       = d_region,
+  d_worker       = d_worker,
+  d_urban        = d_urban,
+  d_edu          = d_edu,
+  # 双列组合
+  d_race_region  = d_race_region,
+  d_race_urban   = d_race_urban,
+  d_region_urban = d_region_urban,
+  d_edu_region   = d_edu_region,
+  d_race_edu     = d_race_edu,
+  # 三列组合
+  d_race_region_urban = d_race_region_urban
+)
 
-result
+for (nm in names(all_datasets)) {
+  print_group_info(nm, all_datasets[[nm]])
+}
+
+
+# ================================================================
+# 批量跑 Comp 并收集结果
+# ================================================================
+results <- list()
+for (nm in names(all_datasets)) {
+  cat("\n>>> 正在运行:", nm, "\n")
+  results[[nm]] <- tryCatch(
+    Comp(all_datasets[[nm]], obj.c = 0.1),
+    error = function(e) {
+      cat("  ERROR:", conditionMessage(e), "\n")
+      NULL
+    }
+  )
+}
+
+# ── 汇总 MSPE（rec2）到一张表 ────────────────────────────────
+mspe_summary <- do.call(rbind, lapply(names(results), function(nm) {
+  r <- results[[nm]]
+  if (is.null(r)) return(NULL)
+  rec2 <- r[[2]]   # cbind(mspe.ALL, mspe.GALL, mspe.GALLRS)
+  data.frame(
+    dataset     = nm,
+    R           = all_datasets[[nm]]$R,
+    p           = all_datasets[[nm]]$p,
+    mspe.ALL    = as.numeric(rec2[1]),
+    mspe.GALL   = as.numeric(rec2[2]),
+    mspe.GALLRS = as.numeric(rec2[3])
+  )
+}))
+
+print(mspe_summary)
 
 
 
