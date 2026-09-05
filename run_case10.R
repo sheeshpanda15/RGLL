@@ -17,7 +17,7 @@ ans <- run_case10_comparison(
   Var.a = getenv_num("VAR_A", 2.25),
   Var.b = getenv_num("VAR_B", 0),
   Var.e = getenv_num("VAR_E", 9),
-  tau = getenv_int("TAU", getenv_int("P", 50) + 1L),
+  tau = getenv_int("TAU", 5 * (getenv_int("P", 50) + 1L)),
   initial_Cn = getenv_int("INITIAL_K", 4),
   sa_max_iter = getenv_int("SA_MAX_ITER", 80),
   em_tol = getenv_num("EM_TOL", 1e-5),

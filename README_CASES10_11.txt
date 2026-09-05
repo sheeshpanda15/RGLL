@@ -24,7 +24,8 @@ Case 10 design
 - Random effects are shared at the 6-type level.
 - OBS uses the 60 over-split administrative units.
 - ORACLE uses the 6 latent predictive types.
-- KM/GMM optimize covariate clustering; CIRG chooses K via model-matched IMSPE.
+- KM/GMM optimize covariate clustering; CIRG chooses K via model-matched IMSPE
+  after RASC clustering and uses SGA for test prediction.
 - CPF and BLM use repeated-measure administrative-unit IDs.
 
 This intentionally creates a prediction-vs-geometry distinction. A geometric
@@ -66,3 +67,8 @@ Important interpretation
 Case 10 has a true predictive partition, so group_ARI is meaningful.
 Case 11 deliberately has no true discrete partition, so group_ARI is NA; use
 MSPE, selected_K, z_R2 and unit_consistency instead.
+
+Default tau
+-----------
+The current scripts use tau = 5*(p+1) by default, matching the main simulation
+setup. Set TAU explicitly in the environment for sensitivity runs.

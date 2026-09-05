@@ -25,8 +25,15 @@ CPF     Ma-Huang-style MCP pairwise-fusion adaptation for repeated grouped data.
 BLM     Bonhomme-Lamadon-Manresa-style two-step discretization. First estimate
         informative group-level random-effect moments; second classify these
         moments by K-means; third fit the common RI/RS LMM.
-CIRG    proposed corrected X-only, RI/RS-matched IMSPE regrouping.
-        The obsolete residual-weight parameter lambda has been removed entirely.
+CIRG    proposed RASC + SGA, RI/RS-matched IMSPE regrouping.
+        Training clusters are built on [X, lambda * standardized residual].
+        Test predictions use soft Gaussian posterior assignment from X.
+
+Estimator note
+--------------
+The C++ mixed-model routines are convergence-based ML-EM estimators, not exact
+REML optimizers. Manuscript text should say ML-EM/convergent EM unless a REML
+implementation is added.
 
 IMPORTANT METHOD-NAMING NOTE
 ----------------------------
@@ -66,9 +73,13 @@ sbatch --export=ALL,MODEL=RI,CASE=2,MIS_TYPE=contam,RHO=0.25,METHODS=ORACLE,OBS,
 
 Outputs
 -------
-results_comparison/RI_case2_contam_rho25.rds
-results_comparison/RS_case2_contam_rho25.rds
-etc.
+run_compare.R saves one RDS per setting and one combined RDS. By default it
+runs R_LIST=10,20,50 and VAR_A_LIST=0.5,2.25 unless R or VAR_A is explicitly
+provided. Override with comma-separated CASE_LIST, R_LIST, VAR_A_LIST, METHODS.
+
+Example:
+results_comparison/RI_case2_R20_vara2.25_contam_rho25.rds
+results_comparison/RI_cases2_grid_contam_rho25.rds
 
 Recommended sequence
 --------------------

@@ -100,7 +100,7 @@ map_unit_partition <- function(unit_group_map, unit_labels) {
 # G_true.
 evaluate_generated_dataset <- function(dat,
                                        methods = c("ORACLE", "OBS", "LM", "KM", "GMM", "CPF", "BLM", "CIRG-U"),
-                                       tau = ncol(dat$X_train) + 1L,
+                                       tau = 5 * (ncol(dat$X_train) + 1L),
                                        K_grid = NULL,
                                        initial_Cn = 2L,
                                        sa_max_iter = 80,
@@ -300,11 +300,11 @@ evaluate_generated_dataset <- function(dat,
     best <- search$best
     fit <- best$imspe_fit
     pred <- if (model_type == "RI") {
-      predict_ri_kmeans(fit, X_test, best$cluster$centroids)
+      predict_ri_soft(fit, X_test, best$cluster$params)
     } else {
-      predict_rs_kmeans(fit, X_test, best$cluster$centroids)
+      predict_rs_soft(fit, X_test, best$cluster$params)
     }
-    telab <- assign_kmeans(X_test, best$cluster$centroids)
+    telab <- predict_soft_labels(X_test, best$cluster$params)
     rt <- proc.time()[3] - t0
     ari <- if (!is.null(true_te)) adjusted_rand_index(telab, true_te) else NA_real_
     d <- metric_row("CIRG-ROW", fit, pred, y_test, beta, var_a, var_b, var_e,
@@ -466,7 +466,7 @@ run_case10_comparison <- function(nloop = 50,
                                   Var.a = 2.25,
                                   Var.b = 0,
                                   Var.e = 9,
-                                  tau = p + 1L,
+                                  tau = 5 * (p + 1L),
                                   K_grid = 2:16,
                                   initial_Cn = 4L,
                                   sa_max_iter = 80,
@@ -618,7 +618,7 @@ run_case11_comparison <- function(nloop = 50,
                                   Var.a = 2.25,
                                   Var.b = 0,
                                   Var.e = 9,
-                                  tau = p + 1L,
+                                  tau = 5 * (p + 1L),
                                   K_grid = 2:15,
                                   initial_Cn = 4L,
                                   sa_max_iter = 80,

@@ -20,7 +20,7 @@
 #            Train labels use (X,y); test labels are transported by an X-only
 #            classifier. This replaces BLM, whose original object is a panel
 #            individual rather than an observation.
-#   CIRG   : proposed observation-level X-only, model-matched IMSPE regrouping.
+#   CIRG   : proposed observation-level RASC + SGA, model-matched IMSPE regrouping.
 #
 # BLM is deliberately NOT a main baseline here: its defining first-step moments
 # are individual/panel-level informative moments. Turning a single row into that
@@ -28,8 +28,8 @@
 # -----------------------------------------------------------------------------
 
 if (!exists("run_comparison_replication", mode = "function")) {
-  if (!file.exists("ROG_method_comparison_legacy.R")) stop("ROG_method_comparison_legacy.R not found.")
-  source("ROG_method_comparison_legacy.R")
+  if (!file.exists("ROG_method_comparison.R")) stop("ROG_method_comparison.R not found.")
+  source("ROG_method_comparison.R")
 }
 
 # ----------------------- generic X -> label transport -------------------------
@@ -138,16 +138,16 @@ cpf_obs_admm_once <- function(prep, lambda, gamma = 3,
   n <- prep$n; edges <- prep$edges
   beta <- tryCatch(qr.solve(X, y), error = function(e) rep(0, ncol(X)))
   alpha <- drop(y - X %*% beta)
-  eta <- drop(D %*% alpha)
+  eta <- as.numeric(D %*% alpha)
   v <- numeric(length(eta))
   converged <- FALSE; used <- 0L
 
   for (it in seq_len(max_iter)) {
-    cvec <- drop(Matrix::crossprod(D, theta * eta - v))
-    qv <- drop(prep$solveA(y + cvec))
+    cvec <- as.numeric(Matrix::crossprod(D, theta * eta - v))
+    qv <- as.numeric(prep$solveA(y + cvec))
     beta <- drop(prep$Sinv_rhs(prep$Xty - crossprod(X, qv)))
-    alpha <- qv - drop(prep$AX %*% beta)
-    d <- drop(D %*% alpha)
+    alpha <- as.numeric(qv - drop(prep$AX %*% beta))
+    d <- as.numeric(D %*% alpha)
     eta_old <- eta
     eta <- prox_mcp(d + v / theta, lambda, theta, gamma)
     r <- d - eta
@@ -310,7 +310,7 @@ run_observation_replication <- function(N = 2500, p = 50, R = 20,
                                         var_a = 2.25, var_b = 0, var_e = 9,
                                         mis_type = "contam", rho = 0.25,
                                         merge_factor = 2L,
-                                        tau = p + 1L,
+                                        tau = 5 * (p + 1L),
                                         initial_Cn = 2L,
                                         sa_max_iter = 80,
                                         em_tol = 1e-5, em_max_iter = 500,
@@ -354,7 +354,7 @@ run_observation_replication <- function(N = 2500, p = 50, R = 20,
                    G_true, 1L, proc.time()[3] - t0, NA_real_))
   }
 
-  maxK <- max(2L, min(R, floor(nrow(X_train) / max(2L, tau))))
+  maxK <- max(2L, floor(nrow(X_train) / max(2L, tau)))
   K_grid <- seq.int(2L, maxK)
 
   if ("KM" %in% methods) {
@@ -404,8 +404,12 @@ run_observation_replication <- function(N = 2500, p = 50, R = 20,
                           seed = seed + 701L, em_tol = em_tol,
                           em_max_iter = em_max_iter, verbose = verbose)
     best <- search$best; fit <- best$imspe_fit
-    pred <- if (model_type == "RI") predict_ri_kmeans(fit, X_test, best$cluster$centroids) else predict_rs_kmeans(fit, X_test, best$cluster$centroids)
-    telab <- assign_kmeans(X_test, best$cluster$centroids)
+    pred <- if (model_type == "RI") {
+      predict_ri_soft(fit, X_test, best$cluster$params)
+    } else {
+      predict_rs_soft(fit, X_test, best$cluster$params)
+    }
+    telab <- predict_soft_labels(X_test, best$cluster$params)
     add(metric_row("CIRG", fit, pred, resp$y_test, beta, var_a, var_b, var_e,
                    G_true, best$K, proc.time()[3] - t0, adjusted_rand_index(telab, true_te), best$objective))
     extra$CIRG <- search
@@ -423,7 +427,7 @@ run_observation_comparison <- function(N_all = 2500, p = 50, R = 20,
                                        nloop = 50, dist_x = "case1",
                                        groupsize = "large", mis_type = "contam",
                                        rho = 0.25, merge_factor = 2L,
-                                       tau = p + 1L, initial_Cn = 2L,
+                                       tau = 5 * (p + 1L), initial_Cn = 2L,
                                        sa_max_iter = 80, em_tol = 1e-5,
                                        em_max_iter = 500, seed = 12345L,
                                        methods = c("ORACLE", "OBS", "LM", "KM", "GMM", "CPF", "MIXREG", "CIRG"),

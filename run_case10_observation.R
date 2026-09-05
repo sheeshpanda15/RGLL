@@ -6,7 +6,7 @@ methods <- strsplit(Sys.getenv("METHODS",unset="ORACLE,OBS,LM,KM,GMM,CPF,MIXREG,
 ans <- run_case10_observation(nloop=as.integer(env_num("NLOOP",50)), p=as.integer(env_num("P",50)),
                               N_test=as.integer(env_num("N_TEST",2500)), K_type=as.integer(env_num("K_TYPE",6)),
                               modes_per_type=as.integer(env_num("MODES_PER_TYPE",2)), Var.a=env_num("VAR_A",2.25),
-                              Var.b=vb, Var.e=env_num("VAR_E",9), tau=as.integer(env_num("TAU",51)),
+                              Var.b=vb, Var.e=env_num("VAR_E",9), tau=as.integer(env_num("TAU",5*(as.integer(env_num("P",50))+1L))),
                               sa_max_iter=as.integer(env_num("SA_MAX_ITER",80)), methods=methods)
 print(ans$summary)
 dir.create("results_observation",showWarnings=FALSE,recursive=TRUE)

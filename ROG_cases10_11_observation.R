@@ -67,7 +67,7 @@ summarize_obs_structured <- function(raw) {
 
 evaluate_observation_dataset <- function(dat,
                                          methods = c("ORACLE","OBS","LM","KM","GMM","CPF","MIXREG","CIRG"),
-                                         tau = ncol(dat$X_train) + 1L,
+                                         tau = 5 * (ncol(dat$X_train) + 1L),
                                          K_grid = 2:16,
                                          initial_Cn = 4L,
                                          sa_max_iter = 80,
@@ -174,8 +174,8 @@ evaluate_observation_dataset <- function(dat,
                       model_type=model_type,max_iter=sa_max_iter,seed=seed+701L,
                       em_tol=em_tol,em_max_iter=em_max_iter,verbose=verbose)
     best <- sr$best; fit <- best$imspe_fit
-    pred <- if (model_type=="RI") predict_ri_kmeans(fit,Xte,best$cluster$centroids) else predict_rs_kmeans(fit,Xte,best$cluster$centroids)
-    telab <- assign_kmeans(Xte,best$cluster$centroids)
+    pred <- if (model_type=="RI") predict_ri_soft(fit,Xte,best$cluster$params) else predict_rs_soft(fit,Xte,best$cluster$params)
+    telab <- predict_soft_labels(Xte,best$cluster$params)
     ari <- if (!is.null(true_te)) adjusted_rand_index(telab,true_te) else NA_real_
     d <- metric_row("CIRG",fit,pred,yte,beta,va,vb,ve,G_true,best$K,proc.time()[3]-t0,ari,best$objective)
     add(d,telab); extra$CIRG <- sr
@@ -253,7 +253,7 @@ generate_case10_observation <- function(p=50,N_test=2500,K_type=6,
 
 run_case10_observation <- function(nloop=50,p=50,N_test=2500,K_type=6,
                                    modes_per_type=2,Var.a=2.25,Var.b=0,Var.e=9,
-                                   tau=p+1L,K_grid=2:16,initial_Cn=4L,
+                                   tau=5*(p+1L),K_grid=2:16,initial_Cn=4L,
                                    sa_max_iter=80,em_tol=1e-5,em_max_iter=500,
                                    seed=12345L,
                                    methods=c("ORACLE","OBS","LM","KM","GMM","CPF","MIXREG","CIRG"),
@@ -341,7 +341,7 @@ generate_case11_observation <- function(p=50,N_test=2500,train_multiplier=3L,
 
 run_case11_observation <- function(nloop=50,p=50,N_test=2500,obs_bins=4L,
                                    proxy_sd=0.35,Var.a=2.25,Var.b=0,Var.e=9,
-                                   tau=p+1L,K_grid=2:15,initial_Cn=4L,
+                                   tau=5*(p+1L),K_grid=2:15,initial_Cn=4L,
                                    sa_max_iter=80,em_tol=1e-5,em_max_iter=500,
                                    seed=12345L,
                                    methods=c("ORACLE","OBS","LM","KM","GMM","CPF","MIXREG","CIRG"),

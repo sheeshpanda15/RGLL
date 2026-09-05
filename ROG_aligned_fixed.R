@@ -1,12 +1,12 @@
 # ROG_aligned_fixed.R
 # -----------------------------------------------------------------------------
-# Corrected CIRG simulation code.
+# CIRG / RASC simulation code aligned with the paper description.
 #
-# Statistical fixes relative to the previous aligned version:
-#   * Clustering is X-only, so the training partition and out-of-sample
-#     assignment use the same observable covariates and the same K-means rule.
-#     (The previous [X, residual] clustering could not be reproduced at test
-#     time without y_test.)
+# Statistical alignment and fixes:
+#   * CIRG uses Residual-Augmented Supervised Clustering (RASC): cluster on
+#     [X, lambda * standardized residual].
+#   * CIRG uses soft Gaussian posterior assignment (SGA) out of sample.
+#   * Minimum group size tau defaults to 5*(p+1), matching the simulation setup.
 #   * RI experiments optimize an RI-specific IMSPE; RS experiments optimize
 #     the RS IMSPE.  The objective is now matched to the fitted model.
 #   * An independent reference X sample estimates target moments; test X is
@@ -19,8 +19,6 @@
 #     effects.
 #   * Random-slope prediction includes both a_k and x' b_k.
 #   * EM fitting iterates to convergence.
-#   * tau defaults to p+1 rather than the very restrictive 5(p+1); tau should
-#     still be studied in a sensitivity analysis.
 #
 # Important statistical note:
 # The C++ estimators are convergence-based ML-EM implementations, not exact
@@ -51,6 +49,10 @@ make_equicor_sigma <- function(p, rho = 0.5) {
 
 make_ar_sigma <- function(p, rho = 0.8) {
   outer(seq_len(p), seq_len(p), function(i, j) rho^abs(i - j))
+}
+
+make_case2_sigma <- function(p) {
+  make_ar_sigma(p, 0.5)
 }
 
 draw_mvn <- function(n, mu, Sigma) {
@@ -94,7 +96,7 @@ generate_covariates <- function(C, p, dist_x, split = c("train", "reference", "t
   R <- length(C)
   SC <- c(0L, cumsum(C))
   X <- matrix(0, nrow = sum(C), ncol = p)
-  Sigma_eq <- make_equicor_sigma(p, 0.5)
+  Sigma_case2 <- make_case2_sigma(p)
   Sigma_ar <- make_ar_sigma(p, 0.8)
   split_offset <- switch(split, train = 0L, reference = 10000000L, test = 20000000L)
 
@@ -106,14 +108,11 @@ generate_covariates <- function(C, p, dist_x, split = c("train", "reference", "t
     if (dist_x == "case1") {
       Xi <- matrix(runif(ni * p, -1, 1), ni, p)
     } else if (dist_x == "case2") {
-      # Intended equicorrelation structure of the legacy code:
-      # diagonal 1, off-diagonal 0.5.  The manuscript formula should be made
-      # explicit in the same way because its current expression is ambiguous.
-      Xi <- draw_mvn(ni, rep(0, p), Sigma_eq)
+      Xi <- draw_mvn(ni, rep(0, p), Sigma_case2)
     } else if (dist_x == "case3") {
       Xi <- matrix(runif(ni * p, -1.55 + i / 20, 0.45 + i / 20), ni, p)
     } else if (dist_x == "case4") {
-      Xi <- draw_mvn(ni, rep(-2 + (i - 1) / 5, p), Sigma_eq)
+      Xi <- draw_mvn(ni, rep(-2 + (i - 1) / 5, p), Sigma_case2)
     } else if (dist_x == "case5") {
       # Paper default: t_10.  Use case5_df=3 for the heavy-tail sensitivity run.
       Xi <- matrix(rt(ni * p, df = case5_df), ni, p)
@@ -127,7 +126,7 @@ generate_covariates <- function(C, p, dist_x, split = c("train", "reference", "t
       Xi <- X1 * (1 - mix) + X2 * mix
     } else if (dist_x == "case8") {
       mu <- if (split == "train") rep(0, p) else rep(1.5, p)
-      Xi <- draw_mvn(ni, mu, Sigma_eq)
+      Xi <- draw_mvn(ni, mu, Sigma_case2)
     } else if (dist_x == "case9") {
       Sigma <- if (split == "train") diag(p) else 2 * Sigma_ar
       Xi <- draw_mvn(ni, rep(0, p), Sigma)
@@ -204,6 +203,64 @@ assign_kmeans <- function(Xnew, centroids) {
   normalize_cluster_labels(lab, K)
 }
 
+regularize_covariance <- function(S, ridge = 1e-6) {
+  S <- (S + t(S)) / 2
+  rr <- ridge
+  for (j in 1:8) {
+    ans <- try(chol(S), silent = TRUE)
+    if (!inherits(ans, "try-error")) return(list(S = S, chol = ans))
+    diag(S) <- diag(S) + rr
+    rr <- rr * 10
+  }
+  ee <- eigen(S, symmetric = TRUE)
+  ee$values[ee$values < ridge] <- ridge
+  S <- ee$vectors %*% diag(ee$values, nrow = length(ee$values)) %*% t(ee$vectors)
+  list(S = S, chol = chol((S + t(S)) / 2))
+}
+
+fit_group_params <- function(X, labels, ridge = 1e-6) {
+  K <- max(labels)
+  p <- ncol(X)
+  n <- nrow(X)
+  means <- vector("list", K)
+  covs <- vector("list", K)
+  chols <- vector("list", K)
+  priors <- numeric(K)
+
+  for (k in seq_len(K)) {
+    idx <- which(labels == k)
+    Xk <- X[idx, , drop = FALSE]
+    priors[k] <- length(idx) / n
+    means[[k]] <- colMeans(Xk)
+    S <- if (nrow(Xk) <= p + 1L) diag(p) else stats::cov(Xk)
+    reg <- regularize_covariance(S + diag(ridge, p), ridge)
+    covs[[k]] <- reg$S
+    chols[[k]] <- reg$chol
+  }
+  list(mu = means, Sigma = covs, chol = chols, pi = priors, K = K)
+}
+
+soft_group_weights <- function(Xnew, params) {
+  n <- nrow(Xnew)
+  p <- ncol(Xnew)
+  K <- params$K
+  logw <- matrix(NA_real_, n, K)
+
+  for (k in seq_len(K)) {
+    Rchol <- params$chol[[k]]
+    centered <- sweep(Xnew, 2, params$mu[[k]], "-")
+    z <- forwardsolve(t(Rchol), t(centered))
+    md2 <- colSums(z^2)
+    logdet <- 2 * sum(log(diag(Rchol)))
+    logw[, k] <- log(max(params$pi[k], .Machine$double.xmin)) -
+      0.5 * (p * log(2 * pi) + logdet + md2)
+  }
+
+  mx <- apply(logw, 1, max)
+  w <- exp(logw - mx)
+  w / rowSums(w)
+}
+
 cluster_x <- function(setseed, X, y, Cn,
                       lambda = 1,  # retained only for backward compatibility
                       tau = ncol(X) + 1L,
@@ -250,14 +307,85 @@ cluster_x <- function(setseed, X, y, Cn,
   )
 }
 
+rasc_cluster <- function(setseed, X, y, Cn,
+                         lambda = 1,
+                         tau = 5 * (ncol(X) + 1L),
+                         batch_size = 1024,
+                         num_init = 3,
+                         max_iters = 50) {
+  n <- nrow(X)
+  p <- ncol(X)
+  tau <- max(2L, as.integer(tau))
+  if (tau < p + 1L) warning("tau < p+1: random-slope group estimates may be unstable.")
+  maxK <- floor(n / tau)
+  if (maxK < 2L) {
+    stop("Training sample is too small for two groups under tau=", tau,
+         ". Increase N or reduce tau.")
+  }
+  current_Cn <- min(max(2L, as.integer(Cn)), maxK)
+
+  Xfix <- cbind(1, X)
+  beta_ols <- tryCatch(
+    qr.solve(Xfix, y),
+    error = function(e) drop(MASS::ginv(crossprod(Xfix)) %*% crossprod(Xfix, y))
+  )
+  resid <- drop(y - Xfix %*% beta_ols)
+  resid_sd <- sd(resid)
+  rstd <- if (!is.finite(resid_sd) || resid_sd < 1e-12) {
+    rep(0, n)
+  } else {
+    (resid - mean(resid)) / resid_sd
+  }
+  X_aug <- cbind(X, lambda * rstd)
+
+  repeat {
+    set.seed(as.integer(setseed + current_Cn * 17L))
+    km <- ClusterR::MiniBatchKmeans(
+      X_aug, clusters = current_Cn,
+      batch_size = min(batch_size, n),
+      num_init = num_init,
+      max_iters = max_iters,
+      initializer = "kmeans++"
+    )
+    labels <- ClusterR::predict_KMeans(X_aug, km$centroids)
+    labels <- normalize_cluster_labels(labels, current_Cn)
+    sizes <- tabulate(labels, nbins = current_Cn)
+    if (all(sizes >= tau)) break
+    current_Cn <- current_Cn - 1L
+    if (current_Cn < 2L) {
+      stop("RASC could not produce >=2 clusters satisfying tau=", tau)
+    }
+  }
+
+  ord <- order(labels)
+  list(
+    K = current_Cn,
+    labels = labels,
+    sizes = as.integer(tabulate(labels, nbins = current_Cn)),
+    X_sorted = X[ord, , drop = FALSE],
+    y_sorted = y[ord],
+    order = ord,
+    augmented_centroids = km$centroids,
+    centroids_x = km$centroids[, seq_len(p), drop = FALSE],
+    params = fit_group_params(X, labels),
+    beta_ols = beta_ols,
+    residual = resid,
+    cluster_mode = "rasc"
+  )
+}
+
 # -------------------------- target moments -----------------------------------
 
-empirical_target_moments <- function(X_reference, centroids) {
-  # Regions chi_k are exactly the K-means Voronoi regions used for test-time
-  # assignment.  This keeps training, reference integration, and prediction
-  # under one observable X-only rule.
-  hard <- assign_kmeans(X_reference, centroids)
-  K <- nrow(centroids)
+empirical_target_moments <- function(X_reference, assignment) {
+  if (is.list(assignment) && !is.null(assignment$K) && !is.null(assignment$mu)) {
+    prob <- soft_group_weights(X_reference, assignment)
+    hard <- max.col(prob, ties.method = "first")
+    K <- assignment$K
+  } else {
+    prob <- NULL
+    hard <- assign_kmeans(X_reference, assignment)
+    K <- nrow(assignment)
+  }
   Fref <- cbind(1, X_reference)
   nref <- nrow(Fref)
 
@@ -278,7 +406,7 @@ empirical_target_moments <- function(X_reference, centroids) {
       mk[[k]] <- colSums(Fk) / nref
     }
   }
-  list(W = W, Wk = Wk, mk = mk, pk = pk, hard = hard)
+  list(W = W, Wk = Wk, mk = mk, pk = pk, hard = hard, prob = prob)
 }
 
 # --------------------------- CIRG objective/search ----------------------------
@@ -288,8 +416,8 @@ evaluate_cirg_candidate <- function(setseed, X_train, y_train, X_reference,
                                     model_type = c("RI", "RS"),
                                     em_tol = 1e-6, em_max_iter = 100) {
   model_type <- match.arg(model_type)
-  cl <- cluster_x(setseed, X_train, y_train, Cn, lambda = lambda, tau = tau)
-  moments <- empirical_target_moments(X_reference, cl$centroids)
+  cl <- rasc_cluster(setseed, X_train, y_train, Cn, lambda = lambda, tau = tau)
+  moments <- empirical_target_moments(X_reference, cl$params)
 
   fit_obj <- if (model_type == "RI") {
     imspe_ri_cpp(
@@ -320,7 +448,7 @@ evaluate_cirg_candidate <- function(setseed, X_train, y_train, X_reference,
 cirg_search <- function(X_train, y_train, X_reference,
                         initial_Cn = 2,
                         lambda = 1,
-                        tau = ncol(X_train) + 1L,
+                        tau = 5 * (ncol(X_train) + 1L),
                         model_type = c("RI", "RS"),
                         T0 = 50,
                         alpha = 0.95,
@@ -333,6 +461,7 @@ cirg_search <- function(X_train, y_train, X_reference,
   tau <- max(2L, as.integer(tau))
   maxK <- floor(nrow(X_train) / tau)
   if (maxK < 2L) stop("No admissible K>=2 under the chosen tau.")
+  set.seed(seed)
 
   current <- evaluate_cirg_candidate(
     seed, X_train, y_train, X_reference,
@@ -383,10 +512,31 @@ cirg_search <- function(X_train, y_train, X_reference,
   trace <- do.call(rbind, trace[seq_len(used + 1L)])
   list(best = best, current = current, trace = trace,
        lambda = lambda, tau = tau, maxK = maxK,
-       model_type = model_type, cluster_mode = "x_only")
+       model_type = model_type, cluster_mode = "rasc")
 }
 
 # ------------------------------- prediction ----------------------------------
+
+predict_ri_soft <- function(fit, Xnew, group_params) {
+  F <- cbind(1, Xnew)
+  w <- soft_group_weights(Xnew, group_params)
+  fixed <- drop(F %*% fit$beta)
+  random <- drop(w %*% as.numeric(fit$u_hat))
+  fixed + random
+}
+
+predict_rs_soft <- function(fit, Xnew, group_params) {
+  F <- cbind(1, Xnew)
+  w <- soft_group_weights(Xnew, group_params)
+  U <- as.matrix(fit$u_hat)
+  usoft <- w %*% U
+  drop(F %*% fit$beta) + rowSums(F * usoft)
+}
+
+predict_soft_labels <- function(Xnew, group_params) {
+  prob <- soft_group_weights(Xnew, group_params)
+  max.col(prob, ties.method = "first")
+}
 
 predict_ri_kmeans <- function(fit, Xnew, centroids) {
   F <- cbind(1, Xnew)
@@ -517,7 +667,7 @@ run_one_replication <- function(N, p, R, dist_x, groupsize,
   regroup_runtime <- proc.time()[3] - t0
   best <- search$best
 
-  # Same selected X-only grouping for both regrouped models.
+  # Same selected RASC grouping for both regrouped models.
   # The model matching the DGP reuses the fit already computed by its IMSPE.
   if (model_type == "RI") {
     fit_gall <- best$imspe_fit
@@ -529,8 +679,8 @@ run_one_replication <- function(N, p, R, dist_x, groupsize,
     fit_gallrs <- best$imspe_fit
   }
 
-  pred_gall <- predict_ri_kmeans(fit_gall, X_test, best$cluster$centroids)
-  pred_gallrs <- predict_rs_kmeans(fit_gallrs, X_test, best$cluster$centroids)
+  pred_gall <- predict_ri_soft(fit_gall, X_test, best$cluster$params)
+  pred_gallrs <- predict_rs_soft(fit_gallrs, X_test, best$cluster$params)
 
   # Oracle benchmark: true train/test group identities share the same random
   # effects, and ALL uses the correctly specified RI/RS model.
@@ -568,7 +718,7 @@ run_one_replication <- function(N, p, R, dist_x, groupsize,
   out$R_true <- R
   out$N_test <- N
   out$objective_model <- model_type
-  out$cluster_mode <- "x_only"
+  out$cluster_mode <- "rasc"
   list(metrics = out, search = search)
 }
 
@@ -584,7 +734,7 @@ run_cirg_simulation <- function(N_all = 2500,
                                 dist_x = "case1",
                                 groupsize = "large",
                                 lambda = 1,
-                                tau = p + 1L,
+                                tau = 5 * (p + 1L),
                                 initial_Cn = 2,
                                 T0 = 50,
                                 alpha = 0.95,
@@ -654,8 +804,9 @@ legacy_recaps <- function(ans, N_all) {
 
 Comp <- function(N_all, p, R, Var.e, nloop, n = NULL,
                  dist_x = "case1", dist_a = "N.ori", groupsize = "large",
-                 obj.c = NULL, lambda = 1, tau = p + 1L, ...) {
-  var_a <- if (dist_a == "N.ML") 0 else if (dist_a == "T") 3 else 2.25
+                 obj.c = NULL, lambda = 1, tau = 5 * (p + 1L),
+                 Var.a = NULL, ...) {
+  var_a <- if (!is.null(Var.a)) Var.a else if (dist_a == "N.ML") 0 else if (dist_a == "T") 3 else 2.25
   int_dist <- if (dist_a == "T") "t3" else "normal"
   ans <- run_cirg_simulation(
     N_all = N_all, p = p, R = R, Var.e = Var.e,
@@ -669,9 +820,9 @@ Comp <- function(N_all, p, R, Var.e, nloop, n = NULL,
 
 Comp_RS <- function(N_all, p, R, Var.e, nloop, n = NULL,
                     dist_x = "case1", dist_a = "N.ori", groupsize = "large",
-                    obj.c = NULL, lambda = 1, tau = p + 1L,
-                    Var.b = 0.1, ...) {
-  var_a <- if (dist_a == "N.ML") 0 else if (dist_a == "T") 3 else 2.25
+                    obj.c = NULL, lambda = 1, tau = 5 * (p + 1L),
+                    Var.a = NULL, Var.b = 0.1, ...) {
+  var_a <- if (!is.null(Var.a)) Var.a else if (dist_a == "N.ML") 0 else if (dist_a == "T") 3 else 2.25
   int_dist <- if (dist_a == "T") "t3" else "normal"
   ans <- run_cirg_simulation(
     N_all = N_all, p = p, R = R, Var.e = Var.e,

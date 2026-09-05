@@ -16,7 +16,7 @@
 #   BLM    : Bonhomme-Lamadon-Manresa-style two-step discretization. Informative
 #            group-level moments are estimated in step 1, K-means discretizes
 #            those moments in step 2, then the same RI/RS LMM is fitted.
-#   CIRG   : proposed corrected X-only, model-matched IMSPE search.
+#   CIRG   : proposed RASC + SGA, model-matched IMSPE search.
 #
 # IMPORTANT:
 # CPF and BLM here are LMM-compatible adaptations, not literal replications of
@@ -482,7 +482,7 @@ run_comparison_replication <- function(N = 2500, p = 50, R = 20,
                                        var_a = 2.25, var_b = 0, var_e = 9,
                                        mis_type = "contam", rho = 0.25,
                                        merge_factor = 2L,
-                                       tau = p + 1L,
+                                       tau = 5 * (p + 1L),
                                        initial_Cn = 2L,
                                        sa_max_iter = 80,
                                        em_tol = 1e-5, em_max_iter = 500,
@@ -539,7 +539,7 @@ run_comparison_replication <- function(N = 2500, p = 50, R = 20,
                    G_true, 1L, rt, NA_real_))
   }
 
-  maxK <- max(2L, min(R, floor(nrow(X_train) / max(2L, tau))))
+  maxK <- max(2L, floor(nrow(X_train) / max(2L, tau)))
   K_grid <- seq.int(2L, maxK)
 
   if ("KM" %in% methods) {
@@ -618,11 +618,11 @@ run_comparison_replication <- function(N = 2500, p = 50, R = 20,
     best <- search$best
     fit <- best$imspe_fit
     if (model_type == "RI") {
-      pred <- predict_ri_kmeans(fit, X_test, best$cluster$centroids)
+      pred <- predict_ri_soft(fit, X_test, best$cluster$params)
     } else {
-      pred <- predict_rs_kmeans(fit, X_test, best$cluster$centroids)
+      pred <- predict_rs_soft(fit, X_test, best$cluster$params)
     }
-    telab <- assign_kmeans(X_test, best$cluster$centroids)
+    telab <- predict_soft_labels(X_test, best$cluster$params)
     rt <- proc.time()[3] - t0
     add(metric_row("CIRG", fit, pred, resp$y_test, beta, var_a, var_b, var_e,
                    G_true, best$K, rt, adjusted_rand_index(telab, true_te), best$objective))
@@ -646,7 +646,7 @@ run_method_comparison <- function(N_all = 2500, p = 50, R = 20,
                                   groupsize = "large",
                                   mis_type = "contam", rho = 0.25,
                                   merge_factor = 2L,
-                                  tau = p + 1L,
+                                  tau = 5 * (p + 1L),
                                   initial_Cn = 2L,
                                   sa_max_iter = 80,
                                   em_tol = 1e-5, em_max_iter = 500,
