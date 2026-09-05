@@ -1,10 +1,13 @@
 // lmm_fast_aligned.cpp
-// Aligned implementation for the CIRG/RASC/IMSPE experiments.
-// Main changes relative to the legacy file:
-//   1) convergence-based EM estimation (instead of a fixed three iterations),
-//   2) full random-intercept + random-slope BLUPs,
-//   3) full empirical IMSPE objective corresponding to Eq. (10) for the
-//      random-slope model, using C11, C12^(k), C22^(kk), W and W_k.
+// Corrected implementation for the CIRG experiments.
+// Main statistical choices:
+//   1) convergence-based ML-EM estimation (not fixed three iterations),
+//   2) RI and RS models have separate IMSPE objectives,
+//   3) the RS covariance is structured as
+//        G = diag(var_a, var_b, ..., var_b),
+//      matching the simulation DGP and avoiding an unidentifiable full
+//      (p+1)x(p+1) covariance with only a small number of groups,
+//   4) full random-intercept + random-slope BLUP prediction.
 
 #include <RcppArmadillo.h>
 #include <algorithm>
@@ -196,6 +199,13 @@ struct RSFit {
   int iterations;
 };
 
+double rs_var_b(const mat& G) {
+  if (G.n_rows <= 1) return NA_REAL;
+  double total = 0.0;
+  for (uword j = 1; j < G.n_rows; ++j) total += G(j, j);
+  return total / static_cast<double>(G.n_rows - 1);
+}
+
 vec rs_gls_beta(const mat& X, const vec& y, const mat& G, double ve,
                 const std::vector<int>& sizes) {
   const int q = static_cast<int>(X.n_cols);
@@ -241,18 +251,28 @@ RSFit fit_rs_internal(const mat& xx, const vec& y, Rcpp::IntegerVector nc,
   const int K = static_cast<int>(sizes.size());
   const int q = static_cast<int>(X.n_cols);
   if (K < 1) Rcpp::stop("No non-empty groups supplied to RS fit.");
+  if (q < 2) Rcpp::stop("RS fit requires at least one slope column.");
 
   vec beta = safe_solve(X.t() * X, X.t() * y);
   vec r0 = y - X * beta;
-  double ve = std::max(EPS_VAR, arma::dot(r0, r0) / std::max(1.0, static_cast<double>(y.n_elem)));
-  mat G = arma::eye(q, q) * std::max(0.1, 0.05 * ve);
+  double ve = std::max(EPS_VAR, arma::dot(r0, r0) /
+                                  std::max(1.0, static_cast<double>(y.n_elem)));
+
+  // Structured covariance matching the DGP:
+  // G = diag(var_a, var_b, ..., var_b).
+  double va = std::max(0.1, 0.10 * ve);
+  double vb = std::max(0.01, 0.01 * ve);
+  mat G(q, q, arma::fill::zeros);
+  G(0, 0) = va;
+  for (int j = 1; j < q; ++j) G(j, j) = vb;
 
   bool converged = false;
   int used = 0;
 
   for (int it = 1; it <= max_iter; ++it) {
     mat Ginv = safe_inv_spd(G);
-    mat G_new(q, q, arma::fill::zeros);
+    double va_num = 0.0;
+    double vb_num = 0.0;
     double ve_num = 0.0;
     int offset = 0;
     vec resid = y - X * beta;
@@ -264,24 +284,37 @@ RSFit fit_rs_internal(const mat& xx, const vec& y, Rcpp::IntegerVector nc,
       mat Minv = safe_inv_spd(ve * Ginv + XtX);
       mat Sigma_u = ve * Minv;
       vec ug = Minv * (Xg.t() * rg);
-      G_new += ug * ug.t() + Sigma_u;
+      mat Euu = ug * ug.t() + Sigma_u;
+
+      va_num += Euu(0, 0);
+      for (int j = 1; j < q; ++j) vb_num += Euu(j, j);
+
       vec err = rg - Xg * ug;
       ve_num += arma::dot(err, err) + arma::trace(XtX * Sigma_u);
       offset += m;
     }
 
-    G_new /= static_cast<double>(K);
-    G_new = 0.5 * (G_new + G_new.t());
-    G_new.diag() += RIDGE0;
-    double ve_new = std::max(EPS_VAR, ve_num / static_cast<double>(y.n_elem));
+    double va_new = std::max(EPS_VAR, va_num / static_cast<double>(K));
+    double vb_new = std::max(EPS_VAR,
+      vb_num / static_cast<double>(K * (q - 1)));
+    double ve_new = std::max(EPS_VAR,
+      ve_num / static_cast<double>(y.n_elem));
+
+    mat G_new(q, q, arma::fill::zeros);
+    G_new(0, 0) = va_new;
+    for (int j = 1; j < q; ++j) G_new(j, j) = vb_new;
+
     vec beta_new = rs_gls_beta(X, y, G_new, ve_new, sizes);
 
     double ch = std::max({
-      rel_mat_change(G_new, G),
+      std::abs(va_new - va) / (1.0 + std::abs(va)),
+      std::abs(vb_new - vb) / (1.0 + std::abs(vb)),
       std::abs(ve_new - ve) / (1.0 + std::abs(ve)),
       rel_vec_change(beta_new, beta)
     });
 
+    va = va_new;
+    vb = vb_new;
     G = G_new;
     ve = ve_new;
     beta = beta_new;
@@ -334,6 +367,7 @@ Rcpp::List rs_to_list(const RSFit& fit) {
     Rcpp::Named("beta") = fit.beta,
     Rcpp::Named("G") = fit.G,
     Rcpp::Named("Var.a") = fit.G(0, 0),
+    Rcpp::Named("Var.b") = rs_var_b(fit.G),
     Rcpp::Named("Var.e") = fit.ve,
     Rcpp::Named("Information") = fit.information,
     Rcpp::Named("u_hat") = fit.uhat,
@@ -360,6 +394,87 @@ Rcpp::List fit_rs_lmm_cpp(const arma::mat& xx,
                           double tol = 1e-6,
                           int max_iter = 100) {
   return rs_to_list(fit_rs_internal(xx, yy, nc, tol, max_iter));
+}
+
+// Full empirical IMSPE for the random-intercept model.
+// For a target point f(x) in region k, prediction is f(x)' beta + a_k.
+// The empirical target summaries are:
+//   W   = E[f f'],
+//   m_k = E[f 1{x in region k}],
+//   p_k = P(x in region k).
+// [[Rcpp::export]]
+Rcpp::List imspe_ri_cpp(const arma::mat& xx,
+                        const arma::vec& yy,
+                        Rcpp::IntegerVector nc,
+                        const arma::mat& W,
+                        Rcpp::List mk_list,
+                        const arma::vec& pk,
+                        double tol = 1e-6,
+                        int max_iter = 100) {
+  RIFit fit = fit_ri_internal(xx, yy, nc, tol, max_iter);
+  mat X = add_intercept(xx);
+  std::vector<int> sizes = positive_sizes(nc);
+  const int K = static_cast<int>(sizes.size());
+  const int q = static_cast<int>(X.n_cols);
+
+  if (static_cast<int>(W.n_rows) != q || static_cast<int>(W.n_cols) != q)
+    Rcpp::stop("W has incompatible dimension.");
+  if (mk_list.size() != K)
+    Rcpp::stop("mk_list length must equal the number of non-empty groups.");
+  if (static_cast<int>(pk.n_elem) != K)
+    Rcpp::stop("pk length must equal the number of non-empty groups.");
+
+  mat A = X.t() * X / fit.ve;
+  std::vector<vec> B(K);
+  std::vector<double> Hinv(K);
+  int offset = 0;
+  for (int k = 0; k < K; ++k) {
+    int m = sizes[k];
+    mat Xg = X.rows(offset, offset + m - 1);
+    B[k] = arma::sum(Xg, 0).t() / fit.ve;
+    Hinv[k] = 1.0 / (1.0 / fit.va + static_cast<double>(m) / fit.ve);
+    offset += m;
+  }
+
+  mat M = A;
+  for (int k = 0; k < K; ++k)
+    M -= Hinv[k] * (B[k] * B[k].t());
+  M = 0.5 * (M + M.t());
+  mat C11 = safe_inv_spd(M);
+
+  double fixed_term = arma::trace(C11 * W);
+  double cross_term = 0.0;
+  double random_term = 0.0;
+
+  for (int k = 0; k < K; ++k) {
+    vec mk = Rcpp::as<vec>(mk_list[k]);
+    if (static_cast<int>(mk.n_elem) != q)
+      Rcpp::stop("A m_k vector has incompatible dimension.");
+
+    vec C12k = -C11 * B[k] * Hinv[k];
+    double C22kk = Hinv[k] +
+      Hinv[k] * Hinv[k] * arma::as_scalar(B[k].t() * C11 * B[k]);
+    cross_term += 2.0 * arma::dot(C12k, mk);
+    random_term += C22kk * pk[k];
+  }
+
+  double imspe = fit.ve + fixed_term + cross_term + random_term;
+
+  return Rcpp::List::create(
+    Rcpp::Named("IMSPE") = imspe,
+    Rcpp::Named("objective") = -imspe,
+    Rcpp::Named("residual_term") = fit.ve,
+    Rcpp::Named("fixed_term") = fixed_term,
+    Rcpp::Named("cross_term") = cross_term,
+    Rcpp::Named("random_term") = random_term,
+    Rcpp::Named("beta") = fit.beta,
+    Rcpp::Named("Var.a") = fit.va,
+    Rcpp::Named("Var.e") = fit.ve,
+    Rcpp::Named("Information") = M,
+    Rcpp::Named("u_hat") = fit.uhat,
+    Rcpp::Named("converged") = fit.converged,
+    Rcpp::Named("iterations") = fit.iterations
+  );
 }
 
 // Full empirical IMSPE corresponding to Eq. (10) in the paper for the
@@ -433,6 +548,7 @@ Rcpp::List imspe_rs_cpp(const arma::mat& xx,
     Rcpp::Named("beta") = fit.beta,
     Rcpp::Named("G") = fit.G,
     Rcpp::Named("Var.a") = fit.G(0,0),
+    Rcpp::Named("Var.b") = rs_var_b(fit.G),
     Rcpp::Named("Var.e") = fit.ve,
     Rcpp::Named("Information") = M,
     Rcpp::Named("u_hat") = fit.uhat,
@@ -489,6 +605,7 @@ Rcpp::List count_info_rs_cpp(const arma::mat& xx,
     Rcpp::Named("beta") = fit.beta,
     Rcpp::Named("G") = fit.G,
     Rcpp::Named("Var.a") = fit.G(0,0),
+    Rcpp::Named("Var.b") = rs_var_b(fit.G),
     Rcpp::Named("Var.e") = fit.ve,
     Rcpp::Named("u_hat") = fit.uhat,
     Rcpp::Named("converged") = fit.converged,
@@ -551,6 +668,7 @@ Rcpp::List Est_hat_RS_cpp(const arma::mat& xx,
     Rcpp::Named("bt0.mse") = bt0_mse,
     Rcpp::Named("beta2") = fit.beta,
     Rcpp::Named("Var.a") = fit.G(0,0),
+    Rcpp::Named("Var.b") = rs_var_b(fit.G),
     Rcpp::Named("Var.e") = fit.ve,
     Rcpp::Named("G.hat") = fit.G,
     Rcpp::Named("u_hat") = fit.uhat,
