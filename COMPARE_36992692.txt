@@ -1,0 +1,27 @@
+Host: erc-hpc-comp186
+MODEL=RI CASE=7 MIS_TYPE=contam RHO=0.25
+============================================================
+Method comparison
+MODEL=RI cases=7 misspec=contam rho=0.25
+N=2500 p=50 R=10,20,50 Var.a=0.5,2.25
+nloop=50 tau=255
+Methods: ORACLE, OBS, LM, KM, GMM, CPF, BLM, CIRG
+============================================================
+
+Running case=7 R=10 Var.a=0.5
+Saved: results_comparison/RI_case7_R10_vara0.5_contam_rho25.rds 
+
+Running case=7 R=10 Var.a=2.25
+Saved: results_comparison/RI_case7_R10_vara2.25_contam_rho25.rds 
+
+Running case=7 R=20 Var.a=0.5
+Saved: results_comparison/RI_case7_R20_vara0.5_contam_rho25.rds 
+
+Running case=7 R=20 Var.a=2.25
+Saved: results_comparison/RI_case7_R20_vara2.25_contam_rho25.rds 
+
+Running case=7 R=50 Var.a=0.5
+Saved: results_comparison/RI_case7_R50_vara0.5_contam_rho25.rds 
+
+Running case=7 R=50 Var.a=2.25
+[2026-09-07T14:02:30.292] error: *** JOB 36992692 ON erc-hpc-comp186 CANCELLED AT 2026-09-07T14:02:30 DUE TO TIME LIMIT ***

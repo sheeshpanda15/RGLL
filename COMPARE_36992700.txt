@@ -1,0 +1,21 @@
+Host: erc-hpc-comp016
+MODEL=RS CASE=5 MIS_TYPE=contam RHO=0.25
+============================================================
+Method comparison
+MODEL=RS cases=5 misspec=contam rho=0.25
+N=2500 p=50 R=10,20,50 Var.a=0.5,2.25
+nloop=50 tau=255
+Methods: ORACLE, OBS, LM, KM, GMM, CPF, BLM, CIRG
+============================================================
+
+Running case=5 R=10 Var.a=0.5
+Saved: results_comparison/RS_case5_R10_vara0.5_varb0.1_contam_rho25.rds 
+
+Running case=5 R=10 Var.a=2.25
+Saved: results_comparison/RS_case5_R10_vara2.25_varb0.1_contam_rho25.rds 
+
+Running case=5 R=20 Var.a=0.5
+Saved: results_comparison/RS_case5_R20_vara0.5_varb0.1_contam_rho25.rds 
+
+Running case=5 R=20 Var.a=2.25
+[2026-09-07T14:22:31.909] error: *** JOB 36992700 ON erc-hpc-comp016 CANCELLED AT 2026-09-07T14:22:31 DUE TO TIME LIMIT ***
