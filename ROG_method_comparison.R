@@ -483,6 +483,7 @@ run_comparison_replication <- function(N = 2500, p = 50, R = 20,
                                        mis_type = "contam", rho = 0.25,
                                        merge_factor = 2L,
                                        tau = 5 * (p + 1L),
+                                       lambda = 1,
                                        initial_Cn = 2L,
                                        sa_max_iter = 80,
                                        em_tol = 1e-5, em_max_iter = 500,
@@ -610,7 +611,7 @@ run_comparison_replication <- function(N = 2500, p = 50, R = 20,
   if ("CIRG" %in% methods) {
     t0 <- proc.time()[3]
     search <- cirg_search(X_train, resp$y_train, X_ref,
-                          initial_Cn = initial_Cn, tau = tau,
+                          initial_Cn = initial_Cn, lambda = lambda, tau = tau,
                           model_type = model_type,
                           max_iter = sa_max_iter, seed = seed + 701L,
                           em_tol = em_tol, em_max_iter = em_max_iter,
@@ -635,6 +636,7 @@ run_comparison_replication <- function(N = 2500, p = 50, R = 20,
   raw$merge_factor <- merge_factor
   raw$dist_x <- dist_x
   raw$var_b <- var_b
+  raw$lambda <- lambda
   raw$R_true <- R
   raw$N_test <- N
   list(metrics = raw, observed = obs, extra = extra)
@@ -647,6 +649,7 @@ run_method_comparison <- function(N_all = 2500, p = 50, R = 20,
                                   mis_type = "contam", rho = 0.25,
                                   merge_factor = 2L,
                                   tau = 5 * (p + 1L),
+                                  lambda = 1,
                                   initial_Cn = 2L,
                                   sa_max_iter = 80,
                                   em_tol = 1e-5, em_max_iter = 500,
@@ -661,7 +664,7 @@ run_method_comparison <- function(N_all = 2500, p = 50, R = 20,
       ans <- run_comparison_replication(N, p, R, dist_x, groupsize,
                                         Var.a, Var.b, Var.e,
                                         mis_type, rho, merge_factor,
-                                        tau, initial_Cn, sa_max_iter,
+                                        tau, lambda, initial_Cn, sa_max_iter,
                                         em_tol, em_max_iter, rep_seed,
                                         methods, verbose = verbose)
       pos <- pos + 1L

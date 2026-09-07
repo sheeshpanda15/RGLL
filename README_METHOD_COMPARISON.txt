@@ -76,10 +76,18 @@ Outputs
 run_compare.R saves one RDS per setting and one combined RDS. By default it
 runs R_LIST=10,20,50 and VAR_A_LIST=0.5,2.25 unless R or VAR_A is explicitly
 provided. Override with comma-separated CASE_LIST, R_LIST, VAR_A_LIST, METHODS.
+Set LAMBDA to control the residual-augmentation weight used by CIRG.
 
 Example:
 results_comparison/RI_case2_R20_vara2.25_contam_rho25.rds
 results_comparison/RI_cases2_grid_contam_rho25.rds
+
+Quick lambda diagnostic
+-----------------------
+Run lambda_diagnostic.R for a paired local comparison of CIRG with LAMBDA_LIST
+values, defaulting to 0 and 1:
+
+  Rscript lambda_diagnostic.R
 
 Recommended sequence
 --------------------

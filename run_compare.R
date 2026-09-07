@@ -29,6 +29,7 @@ VAR_A_LIST_DEFAULT <- if (nzchar(Sys.getenv("VAR_A", unset = ""))) VAR_A_SINGLE 
 R_LIST <- get_int_list("R_LIST", R_LIST_DEFAULT)
 VAR_A_LIST <- get_num_list("VAR_A_LIST", VAR_A_LIST_DEFAULT)
 TAU <- get_i("TAU", 5 * (P + 1L))
+LAMBDA <- get_d("LAMBDA", 1)
 EM_MAX <- get_i("EM_MAX", 500)
 SA_MAX <- get_i("SA_MAX", 80)
 VAR_B <- if (MODEL == "RS") get_d("VAR_B", 0.1) else 0
@@ -38,12 +39,13 @@ methods <- trimws(methods)
 dir.create("results_comparison", showWarnings = FALSE, recursive = TRUE)
 tag_rho <- if (MIS_TYPE == "contam") sprintf("_rho%02d", round(100 * RHO)) else ""
 tag_vb <- if (MODEL == "RS") sprintf("_varb%s", format(VAR_B, trim = TRUE, scientific = FALSE)) else ""
+tag_lambda <- sprintf("_lambda%s", format(LAMBDA, trim = TRUE, scientific = FALSE))
 
 cat("============================================================\n")
 cat("Method comparison\n")
 cat("MODEL=", MODEL, " cases=", paste(CASE_LIST, collapse=","), " misspec=", MIS_TYPE, " rho=", RHO, "\n", sep="")
 cat("N=", N, " p=", P, " R=", paste(R_LIST, collapse=","), " Var.a=", paste(VAR_A_LIST, collapse=","), "\n", sep="")
-cat("nloop=", NLOOP, " tau=", TAU, "\n", sep="")
+cat("nloop=", NLOOP, " tau=", TAU, " lambda=", LAMBDA, "\n", sep="")
 cat("Methods: ", paste(methods, collapse=", "), "\n", sep="")
 cat("============================================================\n")
 
@@ -55,16 +57,16 @@ for (case_id in CASE_LIST) {
     for (Var_a in VAR_A_LIST) {
       pos <- pos + 1L
       outfile <- sprintf(
-        "results_comparison/%s_case%d_R%d_vara%s%s_%s%s.rds",
+        "results_comparison/%s_case%d_R%d_vara%s%s%s_%s%s.rds",
         MODEL, case_id, R_value,
         format(Var_a, trim = TRUE, scientific = FALSE),
-        tag_vb, MIS_TYPE, tag_rho
+        tag_vb, tag_lambda, MIS_TYPE, tag_rho
       )
       cat("\nRunning case=", case_id, " R=", R_value, " Var.a=", Var_a, "\n", sep="")
       ans <- run_method_comparison(
         N_all = N, p = P, R = R_value, Var.e = 9, Var.a = Var_a, Var.b = VAR_B,
         nloop = NLOOP, dist_x = paste0("case", case_id), groupsize = "large",
-        mis_type = MIS_TYPE, rho = RHO, tau = TAU,
+        mis_type = MIS_TYPE, rho = RHO, tau = TAU, lambda = LAMBDA,
         sa_max_iter = SA_MAX, em_tol = 1e-5, em_max_iter = EM_MAX,
         methods = methods, seed = 12345L
       )
@@ -85,8 +87,8 @@ combined <- list(
   raw = do.call(rbind, lapply(all_runs, `[[`, "raw")),
   summary = do.call(rbind, lapply(all_runs, `[[`, "summary"))
 )
-combined_file <- sprintf("results_comparison/%s_cases%s_grid_%s%s.rds",
-                         MODEL, paste(CASE_LIST, collapse="-"), MIS_TYPE, tag_rho)
+combined_file <- sprintf("results_comparison/%s_cases%s_grid%s_%s%s.rds",
+                         MODEL, paste(CASE_LIST, collapse="-"), tag_lambda, MIS_TYPE, tag_rho)
 saveRDS(combined, combined_file)
 cat("\nFinished. Elapsed minutes:", elapsed, "\n")
 cat("Saved combined:", combined_file, "\n\n")
