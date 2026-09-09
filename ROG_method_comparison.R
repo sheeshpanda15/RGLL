@@ -478,6 +478,127 @@ metric_row <- function(method, fit, pred, y_test, beta, var_a, var_b, var_e,
   d
 }
 
+standardize_direction <- function(v) {
+  s <- sqrt(sum(v^2))
+  if (!is.finite(s) || s < 1e-12) return(v)
+  v / s
+}
+
+generate_case10_comparison_data <- function(C_train, C_test, p, beta,
+                                            var_a, var_b, var_e, seed) {
+  R <- length(C_train)
+  v_type <- numeric(p)
+  v_type[seq_len(min(18L, p))] <- seq(1, 0.35, length.out = min(18L, p))
+  v_type <- standardize_direction(v_type)
+
+  v_nuis <- numeric(p)
+  if (p >= 10L) {
+    lo <- min(19L, p)
+    hi <- min(30L, p)
+    if (lo <= hi) v_nuis[lo:hi] <- seq(1, 0.4, length.out = hi - lo + 1L)
+  } else {
+    v_nuis[seq_len(p)] <- rev(seq(0.4, 1, length.out = p))
+  }
+  v_nuis <- standardize_direction(v_nuis - sum(v_nuis * v_type) * v_type)
+
+  type_score <- if (R == 1L) 0 else seq(-(R - 1) / 2, (R - 1) / 2, length.out = R)
+  Sigma <- make_ar_sigma(p, 0.20) * 0.35
+
+  make_X <- function(C, offset) {
+    X <- matrix(0, sum(C), p)
+    start <- 0L
+    for (g in seq_len(R)) {
+      set.seed(seed + offset + 1009L * g)
+      idx <- (start + 1L):(start + C[g])
+      mode <- sample(c(-1, 1), C[g], replace = TRUE)
+      mu_type <- 2.0 * type_score[g] * v_type
+      X[idx, ] <- draw_mvn(C[g], mu_type, Sigma) +
+        mode %*% matrix(1.25 * v_nuis, nrow = 1L)
+      start <- start + C[g]
+    }
+    X
+  }
+
+  X_train <- make_X(C_train, 100000L)
+  X_ref <- make_X(C_test, 200000L)
+  X_test <- make_X(C_test, 300000L)
+  resp <- generate_responses(X_train, X_test, C_train, C_test, beta,
+                             var_a, var_b, var_e, seed + 400001L, "normal")
+  list(X_train = X_train, X_ref = X_ref, X_test = X_test, resp = resp)
+}
+
+generate_case11_comparison_data <- function(C_train, C_test, p, beta,
+                                            var_a, var_b, var_e, seed) {
+  R <- length(C_train)
+  set.seed(seed + 700001L)
+  z <- if (R == 1L) 0 else seq(-1, 1, length.out = R)
+  z <- pmin(1, pmax(-1, z + rnorm(R, sd = 0.04)))
+  z <- sample(z, R, replace = FALSE)
+
+  mu_fun <- function(zv) {
+    out <- numeric(p)
+    a <- seq_len(min(p, 10L))
+    out[a] <- seq(1.3, 0.5, length.out = length(a)) * zv
+    if (p > 10L) {
+      b <- 11L:min(p, 20L)
+      out[b] <- seq(1.0, 0.4, length.out = length(b)) * (zv^2 - 1 / 3)
+    }
+    if (p > 20L) {
+      c <- 21L:min(p, 30L)
+      out[c] <- seq(0.9, 0.35, length.out = length(c)) * sin(pi * zv)
+    }
+    out
+  }
+  centers <- t(vapply(z, mu_fun, numeric(p)))
+  Sigma <- make_ar_sigma(p, 0.15) * 0.30
+
+  make_X <- function(C, offset) {
+    X <- matrix(0, sum(C), p)
+    start <- 0L
+    for (g in seq_len(R)) {
+      set.seed(seed + offset + 1013L * g)
+      idx <- (start + 1L):(start + C[g])
+      X[idx, ] <- draw_mvn(C[g], centers[g, ], Sigma)
+      start <- start + C[g]
+    }
+    X
+  }
+
+  X_train <- make_X(C_train, 100000L)
+  X_ref <- make_X(C_test, 200000L)
+  X_test <- make_X(C_test, 300000L)
+
+  a <- 1.25 * z + 0.75 * sin(pi * z) + rnorm(R, sd = 0.20)
+  a <- a - mean(a)
+  if (sd(a) > 1e-10) a <- a / sd(a) * sqrt(var_a)
+  B <- matrix(0, R, p)
+  if (var_b > 0) {
+    for (j in seq_len(p)) {
+      B[, j] <- 0.65 * z + 0.35 * sin(pi * z + 2 * pi * j / p) +
+        rnorm(R, sd = 0.20)
+      B[, j] <- B[, j] - mean(B[, j])
+    }
+    current <- mean(apply(B, 2, var))
+    if (is.finite(current) && current > 1e-12) B <- B * sqrt(var_b / current)
+  }
+
+  g_train <- rep(seq_len(R), C_train)
+  g_test <- rep(seq_len(R), C_test)
+  y_train <- 1 + drop(X_train %*% beta) + a[g_train] +
+    rowSums(X_train * B[g_train, , drop = FALSE]) +
+    rnorm(nrow(X_train), sd = sqrt(var_e))
+  y_test <- 1 + drop(X_test %*% beta) + a[g_test] +
+    rowSums(X_test * B[g_test, , drop = FALSE]) +
+    rnorm(nrow(X_test), sd = sqrt(var_e))
+
+  resp <- list(
+    y_train = y_train, y_test = y_test,
+    true_group_train = g_train, true_group_test = g_test,
+    a = a, B = B, G_true = diag(c(var_a, rep(var_b, p)))
+  )
+  list(X_train = X_train, X_ref = X_ref, X_test = X_test, resp = resp)
+}
+
 summarize_comparison <- function(raw) {
   num <- c("MSPE", "beta_MSE", "beta_SSE", "intercept_MSE",
            "Var_a_hat", "Var_b_hat", "Var_e_hat", "Var_a_MSE",
@@ -546,11 +667,27 @@ run_comparison_replication <- function(N = 2500, p = 50, R = 20,
   C_train <- as.integer(3L * C_test)
   C_ref <- C_test
 
-  X_train <- generate_covariates(C_train, p, dist_x, "train", seed + 11L)
-  X_ref <- generate_covariates(C_ref, p, dist_x, "reference", seed + 23L)
-  X_test <- generate_covariates(C_test, p, dist_x, "test", seed + 37L)
-  resp <- generate_responses(X_train, X_test, C_train, C_test, beta,
-                             var_a, var_b, var_e, seed + 101L, "normal")
+  if (dist_x == "case10") {
+    dat <- generate_case10_comparison_data(C_train, C_test, p, beta,
+                                           var_a, var_b, var_e, seed + 101L)
+    X_train <- dat$X_train
+    X_ref <- dat$X_ref
+    X_test <- dat$X_test
+    resp <- dat$resp
+  } else if (dist_x == "case11") {
+    dat <- generate_case11_comparison_data(C_train, C_test, p, beta,
+                                           var_a, var_b, var_e, seed + 101L)
+    X_train <- dat$X_train
+    X_ref <- dat$X_ref
+    X_test <- dat$X_test
+    resp <- dat$resp
+  } else {
+    X_train <- generate_covariates(C_train, p, dist_x, "train", seed + 11L)
+    X_ref <- generate_covariates(C_ref, p, dist_x, "reference", seed + 23L)
+    X_test <- generate_covariates(C_test, p, dist_x, "test", seed + 37L)
+    resp <- generate_responses(X_train, X_test, C_train, C_test, beta,
+                               var_a, var_b, var_e, seed + 101L, "normal")
+  }
   true_tr <- resp$true_group_train; true_te <- resp$true_group_test
   needs_proxy_labels <- any(methods %in% c("OBS", "CPF", "BLM"))
   obs <- if (needs_proxy_labels && label_policy == "unknown") {

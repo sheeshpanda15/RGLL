@@ -8,7 +8,7 @@ COMMON="$COMMON,KMEANS_NUM_INIT=1,KMEANS_MAX_ITERS=25"
 COMMON="$COMMON,CPF_LAMBDA_POINTS=6,CPF_MAX_ITER=300,BLM_NSTART=5"
 
 for model in RI RS; do
-  for case in {1..9}; do
+  for case in {1..11}; do
     for r in 10 20 50; do
       for vara in 0.5 2.25; do
         sbatch --export=ALL,MODEL=$model,CASE=$case,R_LIST=$r,VAR_A_LIST=$vara,$COMMON compare_job.sh
