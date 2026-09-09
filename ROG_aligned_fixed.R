@@ -262,11 +262,11 @@ soft_group_weights <- function(Xnew, params) {
 }
 
 cluster_x <- function(setseed, X, y, Cn,
-                      lambda = 1,  # retained only for backward compatibility
+                      lambda = 0,  # retained only for backward compatibility
                       tau = ncol(X) + 1L,
                       batch_size = 1024,
-                      num_init = 3,
-                      max_iters = 50) {
+                      num_init = 1,
+                      max_iters = 25) {
   n <- nrow(X)
   tau <- max(2L, as.integer(tau))
   maxK <- floor(n / tau)
@@ -308,11 +308,11 @@ cluster_x <- function(setseed, X, y, Cn,
 }
 
 rasc_cluster <- function(setseed, X, y, Cn,
-                         lambda = 1,
+                         lambda = 0,
                          tau = 5 * (ncol(X) + 1L),
                          batch_size = 1024,
-                         num_init = 3,
-                         max_iters = 50) {
+                         num_init = 1,
+                         max_iters = 25) {
   n <- nrow(X)
   p <- ncol(X)
   tau <- max(2L, as.integer(tau))
@@ -414,9 +414,14 @@ empirical_target_moments <- function(X_reference, assignment) {
 evaluate_cirg_candidate <- function(setseed, X_train, y_train, X_reference,
                                     Cn, lambda, tau,
                                     model_type = c("RI", "RS"),
-                                    em_tol = 1e-6, em_max_iter = 100) {
+                                    cirg_criterion = c("IMSPE", "I"),
+                                    em_tol = 1e-6, em_max_iter = 100,
+                                    kmeans_num_init = 1,
+                                    kmeans_max_iters = 25) {
   model_type <- match.arg(model_type)
-  cl <- rasc_cluster(setseed, X_train, y_train, Cn, lambda = lambda, tau = tau)
+  cirg_criterion <- match.arg(cirg_criterion)
+  cl <- rasc_cluster(setseed, X_train, y_train, Cn, lambda = lambda, tau = tau,
+                     num_init = kmeans_num_init, max_iters = kmeans_max_iters)
   moments <- empirical_target_moments(X_reference, cl$params)
 
   fit_obj <- if (model_type == "RI") {
@@ -432,32 +437,40 @@ evaluate_cirg_candidate <- function(setseed, X_train, y_train, X_reference,
       tol = em_tol, max_iter = em_max_iter
     )
   }
+  i_optimal <- if (!is.null(fit_obj$classical_I)) fit_obj$classical_I else fit_obj$fixed_term
+  objective <- if (cirg_criterion == "I") -i_optimal else fit_obj$objective
 
   list(
     requested_K = Cn,
     K = cl$K,
     cluster = cl,
     moments = moments,
-    objective = fit_obj$objective,
+    objective = objective,
     IMSPE = fit_obj$IMSPE,
+    I_optimal = i_optimal,
     imspe_fit = fit_obj,
-    model_type = model_type
+    model_type = model_type,
+    cirg_criterion = cirg_criterion
   )
 }
 
 cirg_search <- function(X_train, y_train, X_reference,
                         initial_Cn = 2,
-                        lambda = 1,
+                        lambda = 0,
                         tau = 5 * (ncol(X_train) + 1L),
                         model_type = c("RI", "RS"),
                         T0 = 50,
                         alpha = 0.95,
-                        max_iter = 80,
+                        max_iter = 25,
                         seed = 1L,
                         em_tol = 1e-6,
                         em_max_iter = 100,
+                        cirg_criterion = c("IMSPE", "I"),
+                        kmeans_num_init = 1,
+                        kmeans_max_iters = 25,
                         verbose = FALSE) {
   model_type <- match.arg(model_type)
+  cirg_criterion <- match.arg(cirg_criterion)
   tau <- max(2L, as.integer(tau))
   maxK <- floor(nrow(X_train) / tau)
   if (maxK < 2L) stop("No admissible K>=2 under the chosen tau.")
@@ -466,7 +479,8 @@ cirg_search <- function(X_train, y_train, X_reference,
   current <- evaluate_cirg_candidate(
     seed, X_train, y_train, X_reference,
     min(max(2L, initial_Cn), maxK), lambda, tau, model_type,
-    em_tol, em_max_iter
+    cirg_criterion, em_tol, em_max_iter,
+    kmeans_num_init, kmeans_max_iters
   )
   best <- current
   Tcur <- T0
@@ -474,6 +488,7 @@ cirg_search <- function(X_train, y_train, X_reference,
   trace[[1L]] <- data.frame(
     iter = 0L, requested_K = current$requested_K, K = current$K,
     objective = current$objective, IMSPE = current$IMSPE,
+    I_optimal = current$I_optimal,
     accepted = TRUE, temperature = Tcur
   )
 
@@ -486,7 +501,8 @@ cirg_search <- function(X_train, y_train, X_reference,
 
     cand <- evaluate_cirg_candidate(
       seed + iter * 10007L, X_train, y_train, X_reference,
-      Ccand, lambda, tau, model_type, em_tol, em_max_iter
+      Ccand, lambda, tau, model_type, cirg_criterion, em_tol, em_max_iter,
+      kmeans_num_init, kmeans_max_iters
     )
 
     delta <- cand$objective - current$objective
@@ -500,19 +516,24 @@ cirg_search <- function(X_train, y_train, X_reference,
     trace[[iter + 1L]] <- data.frame(
       iter = iter, requested_K = Ccand, K = cand$K,
       objective = cand$objective, IMSPE = cand$IMSPE,
+      I_optimal = cand$I_optimal,
       accepted = accepted, temperature = Tcur
     )
     if (verbose) {
-      cat(sprintf("iter=%d model=%s K=%d candK=%d IMSPE=%.6f best=%.6f accepted=%s\n",
-                  iter, model_type, current$K, cand$K,
-                  cand$IMSPE, best$IMSPE, accepted))
+      cat(sprintf("iter=%d model=%s criterion=%s K=%d candK=%d IMSPE=%.6f I=%.6f best_obj=%.6f accepted=%s\n",
+                  iter, model_type, cirg_criterion, current$K, cand$K,
+                  cand$IMSPE, cand$I_optimal,
+                  best$objective, accepted))
     }
   }
 
   trace <- do.call(rbind, trace[seq_len(used + 1L)])
   list(best = best, current = current, trace = trace,
        lambda = lambda, tau = tau, maxK = maxK,
-       model_type = model_type, cluster_mode = "rasc")
+       model_type = model_type, cirg_criterion = cirg_criterion,
+       kmeans_num_init = kmeans_num_init,
+       kmeans_max_iters = kmeans_max_iters,
+       cluster_mode = "rasc")
 }
 
 # ------------------------------- prediction ----------------------------------
@@ -626,8 +647,8 @@ run_one_replication <- function(N, p, R, dist_x, groupsize,
                                 lambda, tau,
                                 seed,
                                 initial_Cn = 2,
-                                T0 = 50, alpha = 0.95, sa_max_iter = 80,
-                                em_tol = 1e-6, em_max_iter = 100,
+                                T0 = 50, alpha = 0.95, sa_max_iter = 25,
+                                em_tol = 1e-6, em_max_iter = 300,
                                 case5_df = 10, case6_logvar = 0.2,
                                 intercept_distribution = "normal",
                                 verbose = FALSE) {
@@ -662,6 +683,7 @@ run_one_replication <- function(N, p, R, dist_x, groupsize,
     T0 = T0, alpha = alpha, max_iter = sa_max_iter,
     seed = seed + 1001L,
     em_tol = em_tol, em_max_iter = em_max_iter,
+    cirg_criterion = "IMSPE",
     verbose = verbose
   )
   regroup_runtime <- proc.time()[3] - t0
@@ -709,6 +731,8 @@ run_one_replication <- function(N, p, R, dist_x, groupsize,
                    runtime = regroup_runtime)
   )
   out$IMSPE_selected <- c(NA_real_, best$IMSPE, best$IMSPE)
+  out$I_optimal_selected <- c(NA_real_, best$I_optimal, best$I_optimal)
+  out$cirg_criterion <- "IMSPE"
   out$lambda <- lambda
   out$tau <- tau
   out$dist_x <- dist_x
@@ -730,17 +754,17 @@ run_cirg_simulation <- function(N_all = 2500,
                                 Var.e = 9,
                                 Var.a = 2.25,
                                 Var.b = 0,
-                                nloop = 50,
+                                nloop = 20,
                                 dist_x = "case1",
                                 groupsize = "large",
-                                lambda = 1,
+                                lambda = 0,
                                 tau = 5 * (p + 1L),
                                 initial_Cn = 2,
                                 T0 = 50,
                                 alpha = 0.95,
-                                sa_max_iter = 80,
+                                sa_max_iter = 25,
                                 em_tol = 1e-6,
-                                em_max_iter = 100,
+                                em_max_iter = 300,
                                 case5_df = 10,
                                 case6_logvar = 0.2,
                                 intercept_distribution = "normal",
@@ -804,7 +828,7 @@ legacy_recaps <- function(ans, N_all) {
 
 Comp <- function(N_all, p, R, Var.e, nloop, n = NULL,
                  dist_x = "case1", dist_a = "N.ori", groupsize = "large",
-                 obj.c = NULL, lambda = 1, tau = 5 * (p + 1L),
+                 obj.c = NULL, lambda = 0, tau = 5 * (p + 1L),
                  Var.a = NULL, ...) {
   var_a <- if (!is.null(Var.a)) Var.a else if (dist_a == "N.ML") 0 else if (dist_a == "T") 3 else 2.25
   int_dist <- if (dist_a == "T") "t3" else "normal"
@@ -820,7 +844,7 @@ Comp <- function(N_all, p, R, Var.e, nloop, n = NULL,
 
 Comp_RS <- function(N_all, p, R, Var.e, nloop, n = NULL,
                     dist_x = "case1", dist_a = "N.ori", groupsize = "large",
-                    obj.c = NULL, lambda = 1, tau = 5 * (p + 1L),
+                    obj.c = NULL, lambda = 0, tau = 5 * (p + 1L),
                     Var.a = NULL, Var.b = 0.1, ...) {
   var_a <- if (!is.null(Var.a)) Var.a else if (dist_a == "N.ML") 0 else if (dist_a == "T") 3 else 2.25
   int_dist <- if (dist_a == "T") "t3" else "normal"

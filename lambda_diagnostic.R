@@ -18,7 +18,7 @@ EM_MAX <- as.integer(Sys.getenv("EM_MAX_ITER", unset = "300"))
 TAU <- as.integer(Sys.getenv("TAU", unset = as.character(5 * (P + 1L))))
 CASE_LIST <- as.integer(strsplit(Sys.getenv("CASE_LIST", unset = "1,2,3,4,5,6,7,8,9"),
                                  ",", fixed = TRUE)[[1]])
-LAMBDA_LIST <- as.numeric(strsplit(Sys.getenv("LAMBDA_LIST", unset = "0,1"),
+LAMBDA_LIST <- as.numeric(strsplit(Sys.getenv("LAMBDA_LIST", unset = "0,0.25,0.5,1"),
                                    ",", fixed = TRUE)[[1]])
 
 dir.create("results_comparison", showWarnings = FALSE, recursive = TRUE)
@@ -43,10 +43,11 @@ for (model in c("RI", "RS")) {
         nloop = NLOOP,
         dist_x = paste0("case", case_id),
         groupsize = "large",
-        mis_type = "contam",
-        rho = 0.25,
+        mis_type = "none",
+        rho = 0,
         tau = TAU,
         lambda = lambda,
+        label_policy = "unknown",
         sa_max_iter = SA_MAX,
         em_tol = 1e-5,
         em_max_iter = EM_MAX,

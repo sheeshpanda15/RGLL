@@ -13,7 +13,7 @@ ans <- run_cirg_simulation(
   nloop = 1,
   dist_x = "case1",
   groupsize = "small",
-  lambda = 1,
+  lambda = 0,
   tau = 5 * (3 + 1),
   initial_Cn = 2,
   sa_max_iter = 5,

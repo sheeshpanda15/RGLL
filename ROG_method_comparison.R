@@ -4,11 +4,10 @@
 # Source ROG_aligned_fixed.R first (done automatically below).
 #
 # Methods:
-#   ORACLE : correctly specified LMM using the true data-generating groups.
+#   ORACLE : infeasible true-group LMM benchmark.
 #   OBS    : LMM using deliberately misspecified observed group labels.
 #   LM     : pooled linear model, ignoring grouping.
 #   KM     : X-only K-means + LMM; K chosen by a BIC-like clustering criterion.
-#   GMM    : Gaussian-mixture clustering of X + LMM (mclust; optional package).
 #   CPF    : Ma-Huang-style concave pairwise fusion adaptation for repeated
 #            grouped observations. Pairwise MCP fusion is applied to observed-
 #            group intercepts via ADMM, then the fused labels are used in the
@@ -19,6 +18,10 @@
 #   CIRG   : proposed RASC + SGA, model-matched IMSPE search.
 #
 # IMPORTANT:
+# Under the paper's unknown-group premise, no method receives true groups.
+# OBS, CPF, and BLM are run with pseudo/random labels by default so their
+# grouping machinery can still be stress-tested without leaking hidden labels.
+#
 # CPF and BLM here are LMM-compatible adaptations, not literal replications of
 # the original papers' model-specific software. The comparison isolates their
 # grouping principles while holding the final LMM estimator and MSPE evaluation
@@ -133,11 +136,25 @@ make_observed_groups <- function(true_train, true_test, X_train, X_test,
        type = type, rho = rho, merge_factor = merge_factor)
 }
 
+balanced_random_labels <- function(n, K, seed) {
+  K <- max(1L, min(as.integer(K), as.integer(n)))
+  set.seed(seed)
+  sample(rep(seq_len(K), length.out = n), n, replace = FALSE)
+}
+
+make_pseudo_groups <- function(X_train, X_test, K = 20L, seed = 1L) {
+  tr <- balanced_random_labels(nrow(X_train), K, seed + 11L)
+  te <- balanced_random_labels(nrow(X_test), K, seed + 29L)
+  z <- compact_label_pair(tr, te)
+  list(train = z$train, test = z$test, K = z$K,
+       type = "random", rho = NA_real_, merge_factor = NA_integer_)
+}
+
 # -------------------------- common LMM prediction -----------------------------
 
 fit_lmm_from_labels <- function(X_train, y_train, labels_train,
                                 model_type = c("RI", "RS"),
-                                em_tol = 1e-5, em_max_iter = 500) {
+                                em_tol = 1e-5, em_max_iter = 300) {
   model_type <- match.arg(model_type)
   s <- sort_by_labels(X_train, y_train, labels_train)
   fit <- if (model_type == "RI") {
@@ -185,7 +202,8 @@ predict_pooled_lm <- function(fit, Xnew) drop(cbind(1, Xnew) %*% fit$beta)
 # ------------------------------- KM baseline ---------------------------------
 
 fit_kmeans_bic <- function(X, K_grid, seed = 1L, tau = 2L,
-                           batch_size = 1024, max_iters = 50) {
+                           batch_size = 1024, num_init = 1,
+                           max_iters = 25) {
   n <- nrow(X); p <- ncol(X)
   tau <- max(2L, as.integer(tau))
   K_grid <- sort(unique(as.integer(K_grid)))
@@ -196,6 +214,7 @@ fit_kmeans_bic <- function(X, K_grid, seed = 1L, tau = 2L,
   for (K in K_grid) {
     cl <- try(cluster_x(seed + 1009L * K, X, rep(0, n), K,
                         tau = tau, batch_size = batch_size,
+                        num_init = num_init,
                         max_iters = max_iters), silent = TRUE)
     if (inherits(cl, "try-error")) next
     lab <- cl$labels
@@ -214,21 +233,14 @@ fit_kmeans_bic <- function(X, K_grid, seed = 1L, tau = 2L,
   best
 }
 
-# ------------------------------- GMM baseline --------------------------------
-
-fit_gmm_bic <- function(X, K_grid, seed = 1L,
-                        modelNames = c("EII", "VII", "EEI", "VEI")) {
-  if (!requireNamespace("mclust", quietly = TRUE)) {
-    stop("GMM baseline requires package 'mclust'. Install with install.packages('mclust').")
-  }
-  set.seed(seed)
-  fit <- mclust::Mclust(X, G = K_grid, modelNames = modelNames, verbose = FALSE)
-  if (is.null(fit$classification)) stop("mclust failed to return a classification.")
-  list(model = fit, labels = as.integer(fit$classification), K = fit$G)
-}
-
-predict_gmm_labels <- function(gmm_fit, Xnew) {
-  as.integer(predict(gmm_fit$model, newdata = Xnew)$classification)
+thin_integer_grid <- function(values, max_points = 8L) {
+  values <- sort(unique(as.integer(values)))
+  values <- values[is.finite(values)]
+  if (!length(values)) return(values)
+  max_points <- max(1L, as.integer(max_points))
+  if (length(values) <= max_points) return(values)
+  idx <- unique(round(seq(1, length(values), length.out = max_points)))
+  values[idx]
 }
 
 # ---------------------- CPF-style MCP pairwise fusion -------------------------
@@ -341,8 +353,9 @@ cpf_admm_once <- function(X, y, unit_labels, lambda,
 
 fit_cpf_bic <- function(X, y, observed_labels,
                         lambda_grid = NULL,
+                        lambda_points = 6L,
                         theta = 1, gamma = 3, bic_c = 10,
-                        tol = 1e-3, max_iter = 1000) {
+                        tol = 2e-3, max_iter = 300) {
   observed_labels <- as.integer(factor(observed_labels))
   G <- max(observed_labels); p <- ncol(X); N <- nrow(X)
   if (G == 1L) return(list(group_map = 1L, K = 1L, trace = NULL))
@@ -355,7 +368,10 @@ fit_cpf_bic <- function(X, y, observed_labels,
   maxdiff <- max(abs(outer(mu0, mu0, "-")))
   if (!is.finite(maxdiff) || maxdiff < 1e-8) maxdiff <- stats::sd(y)
   if (!is.finite(maxdiff) || maxdiff < 1e-8) maxdiff <- 1
-  if (is.null(lambda_grid)) lambda_grid <- seq(0.03, 1.20, length.out = 16) * maxdiff
+  if (is.null(lambda_grid)) {
+    lambda_points <- max(3L, as.integer(lambda_points))
+    lambda_grid <- seq(0.05, 1.20, length.out = lambda_points) * maxdiff
+  }
 
   Cn <- bic_c * log(log(max(G + p, 3)))
   best <- NULL; tr <- list()
@@ -414,7 +430,8 @@ blm_informative_moments <- function(X, y, unit_labels,
 
 fit_blm_discretization <- function(X, y, observed_labels,
                                    model_type = c("RI", "RS"),
-                                   K_grid = NULL, seed = 1L, ridge = 1) {
+                                   K_grid = NULL, seed = 1L, ridge = 1,
+                                   nstart = 5L, iter.max = 50L) {
   model_type <- match.arg(model_type)
   observed_labels <- as.integer(factor(observed_labels))
   G <- max(observed_labels)
@@ -430,7 +447,7 @@ fit_blm_discretization <- function(X, y, observed_labels,
       wss <- sum(M^2)
     } else {
       set.seed(seed + 7919L * K)
-      km <- stats::kmeans(M, centers = K, nstart = 25, iter.max = 100)
+      km <- stats::kmeans(M, centers = K, nstart = nstart, iter.max = iter.max)
       lab <- km$cluster
       wss <- km$tot.withinss
     }
@@ -449,10 +466,15 @@ fit_blm_discretization <- function(X, y, observed_labels,
 
 metric_row <- function(method, fit, pred, y_test, beta, var_a, var_b, var_e,
                        G_true, selected_K, runtime, ari = NA_real_,
-                       objective = NA_real_) {
+                       objective = NA_real_, I_optimal = NA_real_,
+                       IMSPE_selected = NA_real_,
+                       cirg_criterion = NA_character_) {
   d <- method_metrics(method, fit, pred, y_test, beta, var_a, var_b, var_e,
                       G_true, selected_K, objective, runtime)
   d$group_ARI <- ari
+  d$I_optimal <- I_optimal
+  d$IMSPE_selected <- IMSPE_selected
+  d$cirg_criterion <- cirg_criterion
   d
 }
 
@@ -460,7 +482,7 @@ summarize_comparison <- function(raw) {
   num <- c("MSPE", "beta_MSE", "beta_SSE", "intercept_MSE",
            "Var_a_hat", "Var_b_hat", "Var_e_hat", "Var_a_MSE",
            "Var_b_MSE", "Var_e_MSE", "G_MSE", "selected_K", "runtime",
-           "iterations", "group_ARI")
+           "iterations", "group_ARI", "objective", "I_optimal", "IMSPE_selected")
   scenario <- ifelse(raw$mis_type == "contam", paste0("contam_", sprintf("%g", raw$rho)), raw$mis_type)
   parts <- lapply(split(raw, interaction(raw$method, scenario, drop = TRUE)), function(d) {
     out <- data.frame(method = d$method[1], mis_type = d$mis_type[1], rho = d$rho[1],
@@ -480,19 +502,43 @@ summarize_comparison <- function(raw) {
 run_comparison_replication <- function(N = 2500, p = 50, R = 20,
                                        dist_x = "case1", groupsize = "large",
                                        var_a = 2.25, var_b = 0, var_e = 9,
-                                       mis_type = "contam", rho = 0.25,
+                                       mis_type = "none", rho = 0.25,
                                        merge_factor = 2L,
                                        tau = 5 * (p + 1L),
-                                       lambda = 1,
+                                       lambda = 0,
+                                       cirg_criterion = c("IMSPE", "I"),
+                                       label_policy = c("unknown", "observed"),
                                        initial_Cn = 2L,
-                                       sa_max_iter = 80,
-                                       em_tol = 1e-5, em_max_iter = 500,
+                                       sa_max_iter = 25,
+                                       em_tol = 1e-5, em_max_iter = 300,
+                                       k_grid_points = 8L,
+                                       kmeans_num_init = 1L,
+                                       kmeans_max_iters = 25L,
+                                       cpf_lambda_points = 6L,
+                                       cpf_max_iter = 300L,
+                                       blm_nstart = 5L,
                                        seed = 12345L,
-                                       methods = c("ORACLE", "OBS", "LM", "KM", "GMM", "CPF", "BLM", "CIRG"),
-                                       gmm_models = c("EII", "VII", "EEI", "VEI"),
+                                       methods = NULL,
                                        verbose = FALSE) {
   set.seed(seed)
-  methods <- unique(toupper(methods))
+  cirg_criterion <- match.arg(cirg_criterion)
+  label_policy <- match.arg(label_policy)
+  if (is.null(methods)) {
+    methods <- if (label_policy == "observed") {
+      c("ORACLE", "OBS", "LM", "KM", "CPF", "BLM", "CIRG")
+    } else {
+      c("LM", "KM", "OBS", "CPF", "BLM", "CIRG")
+    }
+  }
+  methods <- unique(toupper(trimws(methods)))
+  methods <- methods[nzchar(methods)]
+  methods <- setdiff(methods, "GMM")
+  if (!length(methods)) {
+    stop("No runnable methods were requested after removing GMM.")
+  }
+  if (label_policy == "unknown" && "ORACLE" %in% methods) {
+    stop("ORACLE uses true groups and is not allowed when LABEL_POLICY=unknown.")
+  }
   beta <- rep(1, p)
   model_type <- if (var_b > 0) "RS" else "RI"
   m <- N / (10 * R)
@@ -506,8 +552,15 @@ run_comparison_replication <- function(N = 2500, p = 50, R = 20,
   resp <- generate_responses(X_train, X_test, C_train, C_test, beta,
                              var_a, var_b, var_e, seed + 101L, "normal")
   true_tr <- resp$true_group_train; true_te <- resp$true_group_test
-  obs <- make_observed_groups(true_tr, true_te, X_train, X_test,
-                              mis_type, rho, merge_factor, seed + 313L)
+  needs_proxy_labels <- any(methods %in% c("OBS", "CPF", "BLM"))
+  obs <- if (needs_proxy_labels && label_policy == "unknown") {
+    make_pseudo_groups(X_train, X_test, K = R, seed = seed + 313L)
+  } else if (needs_proxy_labels) {
+    make_observed_groups(true_tr, true_te, X_train, X_test,
+                         mis_type, rho, merge_factor, seed + 313L)
+  } else {
+    NULL
+  }
   G_true <- if (var_b > 0) resp$G_true else NULL
   rows <- list(); extra <- list()
 
@@ -541,11 +594,13 @@ run_comparison_replication <- function(N = 2500, p = 50, R = 20,
   }
 
   maxK <- max(2L, floor(nrow(X_train) / max(2L, tau)))
-  K_grid <- seq.int(2L, maxK)
+  K_grid <- thin_integer_grid(seq.int(2L, maxK), k_grid_points)
 
   if ("KM" %in% methods) {
     t0 <- proc.time()[3]
-    km <- fit_kmeans_bic(X_train, K_grid, seed + 401L, tau = tau)
+    km <- fit_kmeans_bic(X_train, K_grid, seed + 401L, tau = tau,
+                         num_init = kmeans_num_init,
+                         max_iters = kmeans_max_iters)
     trlab <- km$cluster$labels
     telab <- assign_kmeans(X_test, km$cluster$centroids)
     fp <- fit_predict_labeled(X_train, resp$y_train, X_test, trlab, telab,
@@ -556,34 +611,12 @@ run_comparison_replication <- function(N = 2500, p = 50, R = 20,
     extra$KM <- km
   }
 
-  if ("GMM" %in% methods) {
-    if (requireNamespace("mclust", quietly = TRUE)) {
-      t0 <- proc.time()[3]
-      gm <- fit_gmm_bic(X_train, K_grid, seed + 503L, gmm_models)
-      trlab <- gm$labels
-      telab <- predict_gmm_labels(gm, X_test)
-      # RS requires enough observations per group. If a GMM component is too
-      # small, skip this replicate rather than silently alter the method.
-      if (model_type == "RS" && min(tabulate(trlab, nbins = max(trlab))) < p + 1L) {
-        warning("GMM produced a group smaller than p+1; GMM row omitted for this replication.")
-      } else {
-        fp <- fit_predict_labeled(X_train, resp$y_train, X_test, trlab, telab,
-                                  model_type, em_tol, em_max_iter)
-        rt <- proc.time()[3] - t0
-        add(metric_row("GMM", fp$fit, fp$pred, resp$y_test, beta, var_a, var_b, var_e,
-                       G_true, fp$K, rt, adjusted_rand_index(telab, true_te)))
-      }
-      extra$GMM <- gm
-    } else {
-      warning("Package mclust is unavailable; GMM baseline skipped.")
-    }
-  }
-
   if ("CPF" %in% methods) {
     t0 <- proc.time()[3]
     cpf <- fit_cpf_bic(X_train, resp$y_train, obs$train,
+                       lambda_points = cpf_lambda_points,
                        theta = 1, gamma = 3, bic_c = 10,
-                       tol = 1e-3, max_iter = 1000)
+                       tol = 2e-3, max_iter = cpf_max_iter)
     cpf_tr <- cpf$group_map[obs$train]
     cpf_te <- cpf$group_map[obs$test]
     fp <- fit_predict_labeled(X_train, resp$y_train, X_test, cpf_tr, cpf_te,
@@ -597,7 +630,8 @@ run_comparison_replication <- function(N = 2500, p = 50, R = 20,
   if ("BLM" %in% methods) {
     t0 <- proc.time()[3]
     blm <- fit_blm_discretization(X_train, resp$y_train, obs$train,
-                                  model_type, seed = seed + 607L, ridge = 1)
+                                  model_type, seed = seed + 607L, ridge = 1,
+                                  nstart = blm_nstart, iter.max = 50L)
     blm_tr <- blm$group_map[obs$train]
     blm_te <- blm$group_map[obs$test]
     fp <- fit_predict_labeled(X_train, resp$y_train, X_test, blm_tr, blm_te,
@@ -615,6 +649,9 @@ run_comparison_replication <- function(N = 2500, p = 50, R = 20,
                           model_type = model_type,
                           max_iter = sa_max_iter, seed = seed + 701L,
                           em_tol = em_tol, em_max_iter = em_max_iter,
+                          cirg_criterion = cirg_criterion,
+                          kmeans_num_init = kmeans_num_init,
+                          kmeans_max_iters = kmeans_max_iters,
                           verbose = verbose)
     best <- search$best
     fit <- best$imspe_fit
@@ -626,7 +663,8 @@ run_comparison_replication <- function(N = 2500, p = 50, R = 20,
     telab <- predict_soft_labels(X_test, best$cluster$params)
     rt <- proc.time()[3] - t0
     add(metric_row("CIRG", fit, pred, resp$y_test, beta, var_a, var_b, var_e,
-                   G_true, best$K, rt, adjusted_rand_index(telab, true_te), best$objective))
+                   G_true, best$K, rt, adjusted_rand_index(telab, true_te),
+                   best$objective, best$I_optimal, best$IMSPE, cirg_criterion))
     extra$CIRG <- search
   }
 
@@ -637,6 +675,11 @@ run_comparison_replication <- function(N = 2500, p = 50, R = 20,
   raw$dist_x <- dist_x
   raw$var_b <- var_b
   raw$lambda <- lambda
+  raw$label_policy <- label_policy
+  raw$label_source <- NA_character_
+  raw$label_source[raw$method %in% c("OBS", "CPF", "BLM")] <-
+    if (label_policy == "unknown") "random_pseudo" else "observed"
+  raw$cirg_criterion[raw$method != "CIRG"] <- NA_character_
   raw$R_true <- R
   raw$N_test <- N
   list(metrics = raw, observed = obs, extra = extra)
@@ -644,37 +687,72 @@ run_comparison_replication <- function(N = 2500, p = 50, R = 20,
 
 run_method_comparison <- function(N_all = 2500, p = 50, R = 20,
                                   Var.e = 9, Var.a = 2.25, Var.b = 0,
-                                  nloop = 50, dist_x = "case1",
+                                  nloop = 20, dist_x = "case1",
                                   groupsize = "large",
-                                  mis_type = "contam", rho = 0.25,
+                                  mis_type = "none", rho = 0.25,
                                   merge_factor = 2L,
                                   tau = 5 * (p + 1L),
-                                  lambda = 1,
+                                  lambda = 0,
+                                  cirg_criterion = c("IMSPE", "I"),
+                                  label_policy = c("unknown", "observed"),
                                   initial_Cn = 2L,
-                                  sa_max_iter = 80,
-                                  em_tol = 1e-5, em_max_iter = 500,
+                                  sa_max_iter = 25,
+                                  em_tol = 1e-5, em_max_iter = 300,
+                                  k_grid_points = 8L,
+                                  kmeans_num_init = 1L,
+                                  kmeans_max_iters = 25L,
+                                  cpf_lambda_points = 6L,
+                                  cpf_max_iter = 300L,
+                                  blm_nstart = 5L,
+                                  n_cores = 1L,
                                   seed = 12345L,
-                                  methods = c("ORACLE", "OBS", "LM", "KM", "GMM", "CPF", "BLM", "CIRG"),
+                                  methods = NULL,
                                   keep_extra = FALSE,
                                   verbose = FALSE) {
-  raw_all <- list(); extra_all <- if (keep_extra) list() else NULL; pos <- 0L
-  for (N in N_all) {
-    for (r in seq_len(nloop)) {
-      rep_seed <- as.integer(seed + 1000003L * r + 7919L * N)
-      ans <- run_comparison_replication(N, p, R, dist_x, groupsize,
-                                        Var.a, Var.b, Var.e,
-                                        mis_type, rho, merge_factor,
-                                        tau, lambda, initial_Cn, sa_max_iter,
-                                        em_tol, em_max_iter, rep_seed,
-                                        methods, verbose = verbose)
-      pos <- pos + 1L
-      d <- ans$metrics
-      d$replication <- r
-      raw_all[[pos]] <- d
-      if (keep_extra) extra_all[[pos]] <- ans$extra
-      if (verbose) cat("N=", N, " replication=", r, " done\n", sep = "")
+  cirg_criterion <- match.arg(cirg_criterion)
+  label_policy <- match.arg(label_policy)
+  if (is.null(methods)) {
+    methods <- if (label_policy == "observed") {
+      c("ORACLE", "OBS", "LM", "KM", "CPF", "BLM", "CIRG")
+    } else {
+      c("LM", "KM", "OBS", "CPF", "BLM", "CIRG")
     }
   }
+  tasks <- list()
+  pos <- 0L
+  for (N in N_all) {
+    for (r in seq_len(nloop)) {
+      pos <- pos + 1L
+      tasks[[pos]] <- list(N = N, r = r,
+                           seed = as.integer(seed + 1000003L * r + 7919L * N))
+    }
+  }
+  run_task <- function(task) {
+    ans <- run_comparison_replication(task$N, p, R, dist_x, groupsize,
+                                      Var.a, Var.b, Var.e,
+                                      mis_type, rho, merge_factor,
+                                      tau, lambda, cirg_criterion,
+                                      label_policy,
+                                      initial_Cn, sa_max_iter,
+                                      em_tol, em_max_iter,
+                                      k_grid_points, kmeans_num_init,
+                                      kmeans_max_iters, cpf_lambda_points,
+                                      cpf_max_iter, blm_nstart,
+                                      task$seed, methods, verbose = FALSE)
+    d <- ans$metrics
+    d$replication <- task$r
+    d$N_setting <- task$N
+    list(raw = d, extra = if (keep_extra) ans$extra else NULL)
+  }
+  n_cores <- max(1L, as.integer(n_cores))
+  if (n_cores > 1L && .Platform$OS.type != "windows") {
+    res <- parallel::mclapply(tasks, run_task, mc.cores = n_cores,
+                              mc.preschedule = FALSE)
+  } else {
+    res <- lapply(tasks, run_task)
+  }
+  raw_all <- lapply(res, `[[`, "raw")
+  extra_all <- if (keep_extra) lapply(res, `[[`, "extra") else NULL
   raw <- do.call(rbind, raw_all)
   summary <- summarize_comparison(raw)
   list(raw = raw, summary = summary, extra = extra_all)
