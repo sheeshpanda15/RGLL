@@ -18,6 +18,18 @@ cd "$R_DIR"
 export PROJECT_DIR="$R_DIR"
 
 echo "Host: $HOSTNAME"
+
+if [[ -n "${SLURM_ARRAY_TASK_ID:-}" ]]; then
+  task_id=$((SLURM_ARRAY_TASK_ID - 1))
+  if (( task_id < 11 )); then
+    export MODEL=RI
+    export CASE=$((task_id + 1))
+  else
+    export MODEL=RS
+    export CASE=$((task_id - 10))
+  fi
+fi
+
 echo "MODEL=${MODEL:-RI} CASE=${CASE:-1} R_LIST=${R_LIST:-default} VAR_A_LIST=${VAR_A_LIST:-default}"
 echo "LABEL_POLICY=${LABEL_POLICY:-unknown} MIS_TYPE=${MIS_TYPE:-none} RHO=${RHO:-0.25} LAMBDA=${LAMBDA:-0} CIRG_CRITERION=${CIRG_CRITERION:-IMSPE}"
 echo "NLOOP=${NLOOP:-20} SA_MAX=${SA_MAX:-25} EM_MAX=${EM_MAX:-300} K_GRID_POINTS=${K_GRID_POINTS:-8} N_CORES=${N_CORES:-${SLURM_CPUS_PER_TASK:-1}}"
