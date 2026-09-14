@@ -1,0 +1,40 @@
+Host: erc-hpc-comp011
+MODEL=RS CASE=7 R_LIST=20 VAR_A_LIST=0.5
+LABEL_POLICY=unknown MIS_TYPE=none RHO=0 LAMBDA=0 CIRG_CRITERION=IMSPE
+NLOOP=20 SA_MAX=25 EM_MAX=300 K_GRID_POINTS=8 N_CORES=8
+============================================================
+Method comparison
+MODEL=RS cases=7 label_policy=unknown misspec=none rho=0
+N=2500 p=50 R=20 Var.a=0.5
+nloop=20 tau=255 lambda=0 CIRG_CRITERION=IMSPE
+Budgets: SA_MAX=25 EM_MAX=300 K_GRID_POINTS=8 KMEANS_NUM_INIT=1 KMEANS_MAX_ITERS=25 CPF_LAMBDA_POINTS=6 CPF_MAX_ITER=300 BLM_NSTART=5 N_CORES=8
+Methods: LM, KM, OBS, CPF, BLM, CIRG
+============================================================
+
+Running case=7 R=20 Var.a=0.5
+Saved: results_comparison/RS_case7_R20_vara0.5_varb0.1_lambda0_none.rds 
+
+Finished. Elapsed minutes: 7.207383 
+Saved combined: results_comparison/RS_cases7_R20_vara0.5_varb0.1_grid_lambda0_none.rds 
+
+  method mis_type rho  n convergence_rate MSPE_mean MSPE_MCSE beta_MSE_mean beta_MSE_MCSE beta_SSE_mean beta_SSE_MCSE intercept_MSE_mean intercept_MSE_MCSE Var_a_hat_mean Var_a_hat_MCSE Var_b_hat_mean Var_b_hat_MCSE
+1    BLM     none  NA 20             1.00  31.79928  1.816667    0.01151970  0.0006258460     0.5759850    0.03129230         0.03709188        0.008213775   0.0001546954   8.341603e-06   1.185575e-04   6.325635e-06
+2   CIRG     none  NA 20             0.75  31.79894  1.816681    0.01149706  0.0006249154     0.5748530    0.03124577         0.03682019        0.008074679   0.0005015142   4.936164e-05   8.237661e-05   7.780041e-06
+3    CPF     none  NA 20             0.95  31.81817  1.818700    0.01151705  0.0006209672     0.5758525    0.03104836         0.03777830        0.008476347   0.0325484937   8.985006e-03   6.187129e-04   4.495119e-05
+4     KM     none  NA 20             1.00  31.79930  1.816694    0.01151976  0.0006257435     0.5759881    0.03128718         0.03740426        0.008213203   0.0004149324   1.702870e-05   6.287316e-05   3.053178e-06
+5     LM     none  NA 20             1.00  31.79928  1.816667    0.01151970  0.0006258460     0.5759850    0.03129230         0.03709188        0.008213775   0.0000000000   0.000000e+00             NA             NA
+6    OBS     none  NA 20             1.00  31.83072  1.815765    0.01152772  0.0006245322     0.5763858    0.03122661         0.03732537        0.008314374   0.0159771351   6.208336e-03   7.526000e-04   3.565585e-05
+  Var_e_hat_mean Var_e_hat_MCSE Var_a_MSE_mean Var_a_MSE_MCSE Var_b_MSE_mean Var_b_MSE_MCSE Var_e_MSE_mean Var_e_MSE_MCSE   G_MSE_mean   G_MSE_MCSE selected_K_mean selected_K_MCSE runtime_mean runtime_MCSE
+1       31.36870       1.748829      0.2498453   8.338701e-06    0.009976303   1.263449e-06       558.4683       95.98757 0.0002878356 2.749343e-08            1.00       0.0000000      0.33085 0.0018712155
+2       31.35694       1.748845      0.2494988   4.929395e-05    0.009983533   1.554359e-06       557.9434       95.96323 0.0002878414 4.806655e-08            4.00       0.4472136     73.20920 6.0975982716
+3       31.30030       1.743700      0.2200448   7.742906e-03    0.009876679   8.936484e-06       555.0729       95.56849 0.0002744632 3.092808e-06           13.25       0.3314641      2.28405 0.1410559701
+4       31.36401       1.748532      0.2495852   1.701526e-05    0.009987429   6.102322e-07       558.2388       95.95201 0.0002879495 1.786055e-08            2.00       0.0000000     62.16415 4.6415375539
+5       31.35906       1.748306      0.2500000   0.000000e+00             NA             NA       558.0023       95.92064           NA           NA            1.00       0.0000000      0.01795 0.0001983484
+6       31.29873       1.744300      0.2350105   5.669163e-03    0.009850071   7.074221e-06       555.0424       95.56822 0.0002797055 2.256940e-06           20.00       0.0000000      2.92480 0.1082343121
+  iterations_mean iterations_MCSE group_ARI_mean group_ARI_MCSE objective_mean objective_MCSE I_optimal_mean I_optimal_MCSE IMSPE_selected_mean IMSPE_selected_MCSE case R_setting Var_a_setting
+1           27.05        0.050000   0.000000e+00   0.000000e+00             NA             NA             NA             NA                  NA                  NA    7        20           0.5
+2          211.85       20.168667  -1.517252e-04   1.756960e-04       -31.5772       1.760667      0.2285037     0.01223565             31.5772            1.760667    7        20           0.5
+3          156.60        9.835328  -1.256142e-04   3.716160e-04             NA             NA             NA             NA                  NA                  NA    7        20           0.5
+4          108.15        2.980882   8.266722e-05   7.091222e-05             NA             NA             NA             NA                  NA                  NA    7        20           0.5
+5            1.00        0.000000             NA             NA             NA             NA             NA             NA                  NA                  NA    7        20           0.5
+6          185.70        6.783145  -3.373013e-05   1.038553e-04             NA             NA             NA             NA                  NA                  NA    7        20           0.5
