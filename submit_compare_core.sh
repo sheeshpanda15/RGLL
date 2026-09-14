@@ -2,10 +2,10 @@
 # Main unknown-group comparison. OBS/CPF/BLM receive random pseudo labels.
 # LAMBDA=0 is explicit so stale shell environment values cannot leak in.
 # Submit one Slurm array instead of 132 separate jobs. Each task is one
-# model/case pair and runs all R and Var.a settings inside run_compare.R.
+# model/case/R setting and runs both Var.a values inside run_compare.R.
 COMMON="LABEL_POLICY=unknown,MIS_TYPE=none,RHO=0,LAMBDA=0,NLOOP=20"
 COMMON="$COMMON,SA_MAX=25,EM_MAX=300,K_GRID_POINTS=8"
 COMMON="$COMMON,KMEANS_NUM_INIT=1,KMEANS_MAX_ITERS=25"
 COMMON="$COMMON,CPF_LAMBDA_POINTS=6,CPF_MAX_ITER=300,BLM_NSTART=5"
 
-sbatch --array=1-22%6 --export=ALL,$COMMON compare_job.sh
+sbatch --array=1-66%6 --export=ALL,$COMMON compare_job.sh

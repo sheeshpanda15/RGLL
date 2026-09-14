@@ -1,5 +1,5 @@
 #!/bin/bash -l
-#SBATCH --output=/users/k21181837/RGSS/COMPARE_%A.txt
+#SBATCH --output=/users/k21181837/RGSS/COMPARE_%A_%a.txt
 #SBATCH --job-name=RGCOMP
 #SBATCH --nodes=1
 #SBATCH --cpus-per-task=8
@@ -21,13 +21,20 @@ echo "Host: $HOSTNAME"
 
 if [[ -n "${SLURM_ARRAY_TASK_ID:-}" ]]; then
   task_id=$((SLURM_ARRAY_TASK_ID - 1))
-  if (( task_id < 11 )); then
+  model_block=$((task_id / 33))
+  within_model=$((task_id % 33))
+  case_id=$((within_model / 3 + 1))
+  r_index=$((within_model % 3))
+  r_values=(10 20 50)
+
+  if (( model_block == 0 )); then
     export MODEL=RI
-    export CASE=$((task_id + 1))
   else
     export MODEL=RS
-    export CASE=$((task_id - 10))
   fi
+  export CASE=$case_id
+  export R_LIST=${r_values[$r_index]}
+  export VAR_A_LIST=0.5,2.25
 fi
 
 echo "MODEL=${MODEL:-RI} CASE=${CASE:-1} R_LIST=${R_LIST:-default} VAR_A_LIST=${VAR_A_LIST:-default}"
