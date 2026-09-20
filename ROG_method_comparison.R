@@ -484,6 +484,109 @@ standardize_direction <- function(v) {
   v / s
 }
 
+rescale_centered <- function(x, target_var) {
+  x <- x - mean(x)
+  if (target_var <= 0) return(x * 0)
+  vx <- stats::var(x)
+  if (!is.finite(vx) || vx < 1e-12) stop("Cannot rescale a constant latent effect.")
+  x * sqrt(target_var / vx)
+}
+
+rescale_slope_matrix <- function(B, target_var) {
+  B <- sweep(B, 2, colMeans(B), "-")
+  if (target_var <= 0) return(B * 0)
+  current <- mean(apply(B, 2, stats::var))
+  if (!is.finite(current) || current < 1e-12) {
+    stop("Cannot rescale constant latent slopes.")
+  }
+  B * sqrt(target_var / current)
+}
+
+allocate_group_counts <- function(total, state, weights) {
+  lev <- sort(unique(state))
+  weights <- as.numeric(weights)
+  if (length(weights) != length(lev) || any(weights <= 0)) {
+    stop("weights must be positive and match the number of latent states.")
+  }
+  weights <- weights / sum(weights)
+  state_totals <- floor(total * weights)
+  state_totals[length(state_totals)] <- state_totals[length(state_totals)] +
+    total - sum(state_totals)
+  out <- integer(length(state))
+  for (j in seq_along(lev)) {
+    idx <- which(state == lev[j])
+    base <- state_totals[j] %/% length(idx)
+    rem <- state_totals[j] %% length(idx)
+    out[idx] <- base + as.integer(seq_along(idx) <= rem)
+  }
+  out
+}
+
+select_groups_by_mass <- function(C, target_fraction, seed) {
+  target <- target_fraction * sum(C)
+  set.seed(seed)
+  remaining <- sample(seq_along(C))
+  selected <- integer(0)
+  current <- 0
+  repeat {
+    candidate_totals <- current + C[remaining]
+    j <- which.min(abs(candidate_totals - target))
+    if (length(selected) && abs(current - target) <= abs(candidate_totals[j] - target)) break
+    selected <- c(selected, remaining[j])
+    current <- candidate_totals[j]
+    remaining <- remaining[-j]
+    if (!length(remaining) || current >= target) break
+  }
+  selected
+}
+
+make_group_covariates <- function(C, centers, Sigma, seed, offset) {
+  p <- ncol(centers)
+  X <- matrix(0, sum(C), p)
+  start <- 0L
+  for (g in seq_along(C)) {
+    set.seed(seed + offset + 1013L * g)
+    idx <- (start + 1L):(start + C[g])
+    X[idx, ] <- draw_mvn(C[g], centers[g, ], Sigma)
+    start <- start + C[g]
+  }
+  X
+}
+
+make_structured_response <- function(X_train, X_test, C_train, C_test,
+                                     beta, a, B, var_e, seed) {
+  g_train <- rep(seq_along(C_train), C_train)
+  g_test <- rep(seq_along(C_test), C_test)
+  set.seed(seed)
+  y_train <- 1 + drop(X_train %*% beta) + a[g_train] +
+    rowSums(X_train * B[g_train, , drop = FALSE]) +
+    rnorm(nrow(X_train), sd = sqrt(var_e))
+  y_test <- 1 + drop(X_test %*% beta) + a[g_test] +
+    rowSums(X_test * B[g_test, , drop = FALSE]) +
+    rnorm(nrow(X_test), sd = sqrt(var_e))
+  list(
+    y_train = y_train, y_test = y_test,
+    true_group_train = g_train, true_group_test = g_test,
+    a = a, B = B,
+    G_true = diag(c(stats::var(a), rep(mean(apply(B, 2, stats::var)), ncol(B))))
+  )
+}
+
+make_latent_slopes <- function(z, p, var_b, mode = c("smooth", "state")) {
+  mode <- match.arg(mode)
+  if (var_b <= 0) return(matrix(0, length(z), p))
+  B <- matrix(0, length(z), p)
+  for (j in seq_len(p)) {
+    phase <- 2 * pi * (j - 1L) / max(p, 1L)
+    B[, j] <- if (mode == "smooth") {
+      0.65 * z + 0.35 * sin(pi * z + phase)
+    } else {
+      z * (0.75 + 0.25 * cos(phase))
+    }
+  }
+  rescale_slope_matrix(B, var_b)
+}
+
 generate_case10_comparison_data <- function(C_train, C_test, p, beta,
                                             var_a, var_b, var_e, seed) {
   R <- length(C_train)
@@ -599,6 +702,132 @@ generate_case11_comparison_data <- function(C_train, C_test, p, beta,
   list(X_train = X_train, X_ref = X_ref, X_test = X_test, resp = resp)
 }
 
+# Cases 12--16 target predictive grouping rather than recovery of the R data-
+# generating groups. Several true groups deliberately share a prediction state,
+# and case 12 has continuous latent effects with no prespecified finite target.
+build_predictive_case <- function(C_train, C_ref, C_test, centers, beta, a, B,
+                                  var_e, seed, scenario,
+                                  predictive_state = NULL) {
+  Sigma <- attr(centers, "Sigma")
+  if (is.null(Sigma)) Sigma <- diag(ncol(centers))
+  X_train <- make_group_covariates(C_train, centers, Sigma, seed, 100000L)
+  X_ref <- make_group_covariates(C_ref, centers, Sigma, seed, 200000L)
+  X_test <- make_group_covariates(C_test, centers, Sigma, seed, 300000L)
+  resp <- make_structured_response(
+    X_train, X_test, C_train, C_test, beta, a, B, var_e, seed + 400001L
+  )
+  list(
+    X_train = X_train, X_ref = X_ref, X_test = X_test, resp = resp,
+    scenario = scenario, predictive_state = predictive_state
+  )
+}
+
+generate_case12_comparison_data <- function(C_train, C_test, p, beta,
+                                             var_a, var_b, var_e, seed) {
+  R <- length(C_train)
+  set.seed(seed + 120001L)
+  z <- seq(-1, 1, length.out = R) + rnorm(R, sd = 0.03)
+  z <- sample(pmin(1, pmax(-1, z)), R)
+  centers <- matrix(0, R, p)
+  j1 <- seq_len(min(5L, p))
+  centers[, j1] <- outer(z, seq(1.0, 0.45, length.out = length(j1)))
+  if (p > 5L) {
+    j2 <- 6L:min(10L, p)
+    qz <- z^2 - mean(z^2)
+    centers[, j2] <- outer(qz, seq(0.85, 0.35, length.out = length(j2)))
+  }
+  attr(centers, "Sigma") <- make_ar_sigma(p, 0.15) * 0.55
+  a <- rescale_centered(1.5 * sin(pi * z) + 0.75 * z^3, var_a)
+  B <- make_latent_slopes(z, p, var_b, "smooth")
+  build_predictive_case(C_train, C_test, C_test, centers, beta, a, B,
+                        var_e, seed, "continuous_predictive_heterogeneity", z)
+}
+
+generate_case13_comparison_data <- function(C_train, C_test, p, beta,
+                                             var_a, var_b, var_e, seed) {
+  R <- length(C_train)
+  set.seed(seed + 130001L)
+  z <- sample(rep(c(-1, 1), length.out = R), R)
+  nuisance <- sample(rep(seq_len(6L), length.out = R), R)
+  v_pred <- numeric(p)
+  v_pred[seq_len(min(8L, p))] <- seq(1, 0.45, length.out = min(8L, p))
+  v_pred <- standardize_direction(v_pred)
+  v_nuis1 <- numeric(p)
+  if (p > 8L) v_nuis1[9L:min(19L, p)] <- 1
+  v_nuis1 <- standardize_direction(v_nuis1)
+  v_nuis2 <- numeric(p)
+  if (p > 19L) v_nuis2[20L:min(30L, p)] <- 1
+  if (sum(v_nuis2^2) < 1e-12) v_nuis2 <- rev(v_nuis1)
+  v_nuis2 <- standardize_direction(v_nuis2)
+  angle <- 2 * pi * (nuisance - 1L) / 6
+  centers <- outer(0.45 * z, v_pred) +
+    outer(1.35 * cos(angle), v_nuis1) +
+    outer(1.35 * sin(angle), v_nuis2)
+  attr(centers, "Sigma") <- make_ar_sigma(p, 0.10) * 0.45
+  a <- rescale_centered(z, var_a)
+  B <- make_latent_slopes(z, p, var_b, "state")
+  build_predictive_case(C_train, C_test, C_test, centers, beta, a, B,
+                        var_e, seed, "density_prediction_conflict", z)
+}
+
+generate_case14_comparison_data <- function(C_train, C_test, p, beta,
+                                             var_a, var_b, var_e, seed) {
+  R <- length(C_train)
+  set.seed(seed + 140001L)
+  z <- sample(rep(c(-1, 1), length.out = R), R)
+  direction <- numeric(p)
+  direction[seq_len(min(10L, p))] <- seq(1, 0.4, length.out = min(10L, p))
+  direction <- standardize_direction(direction)
+  centers <- outer(0.65 * z, direction)
+  attr(centers, "Sigma") <- make_ar_sigma(p, 0.10)
+  a <- rescale_centered(z, var_a)
+  B <- make_latent_slopes(z, p, var_b, "state")
+  build_predictive_case(C_train, C_test, C_test, centers, beta, a, B,
+                        var_e, seed, "overlapping_predictive_states", z)
+}
+
+generate_case15_comparison_data <- function(C_train, C_test, p, beta,
+                                             var_a, var_b, var_e, seed) {
+  R <- length(C_train)
+  state <- integer(R)
+  rare_groups <- select_groups_by_mass(C_test, 0.15, seed + 150001L)
+  state[rare_groups] <- 1L
+  pi_group <- mean(state)
+  direction <- numeric(p)
+  direction[seq_len(min(10L, p))] <- seq(1, 0.4, length.out = min(10L, p))
+  direction <- standardize_direction(direction)
+  centers <- outer(0.80 * state, direction)
+  centers <- sweep(centers, 2, colMeans(centers), "-")
+  attr(centers, "Sigma") <- make_ar_sigma(p, 0.10) * 0.80
+  latent <- state - pi_group
+  a <- rescale_centered(latent, var_a)
+  B <- make_latent_slopes(latent, p, var_b, "state")
+  build_predictive_case(C_train, C_test, C_test, centers, beta, a, B,
+                        var_e, seed, "rare_high_loss_state", state)
+}
+
+generate_case16_comparison_data <- function(C_train, C_test, p, beta,
+                                             var_a, var_b, var_e, seed) {
+  R <- length(C_train)
+  set.seed(seed + 160001L)
+  z <- sample(rep(c(-1, 0, 1), length.out = R), R)
+  train_counts <- allocate_group_counts(sum(C_train), z, c(0.70, 0.20, 0.10))
+  target_counts <- allocate_group_counts(sum(C_test), z, c(0.10, 0.20, 0.70))
+  direction1 <- numeric(p)
+  direction1[seq_len(min(10L, p))] <- seq(1, 0.4, length.out = min(10L, p))
+  direction1 <- standardize_direction(direction1)
+  direction2 <- numeric(p)
+  if (p > 10L) direction2[11L:min(20L, p)] <- seq(1, 0.4, length.out = min(10L, p - 10L))
+  direction2 <- standardize_direction(direction2)
+  centers <- outer(1.1 * z, direction1) + outer(0.7 * (z^2 - 2 / 3), direction2)
+  attr(centers, "Sigma") <- make_ar_sigma(p, 0.15) * 0.55
+  a <- rescale_centered(z + 0.5 * sin(pi * z / 2), var_a)
+  B <- make_latent_slopes(z, p, var_b, "smooth")
+  build_predictive_case(train_counts, target_counts, target_counts, centers,
+                        beta, a, B, var_e, seed,
+                        "target_distribution_shift", z)
+}
+
 summarize_comparison <- function(raw) {
   num <- c("MSPE", "beta_MSE", "beta_SSE", "intercept_MSE",
            "Var_a_hat", "Var_b_hat", "Var_e_hat", "Var_a_MSE",
@@ -677,6 +906,15 @@ run_comparison_replication <- function(N = 2500, p = 50, R = 20,
   } else if (dist_x == "case11") {
     dat <- generate_case11_comparison_data(C_train, C_test, p, beta,
                                            var_a, var_b, var_e, seed + 101L)
+    X_train <- dat$X_train
+    X_ref <- dat$X_ref
+    X_test <- dat$X_test
+    resp <- dat$resp
+  } else if (dist_x %in% paste0("case", 12:16)) {
+    generator <- get(paste0("generate_", dist_x, "_comparison_data"),
+                     mode = "function")
+    dat <- generator(C_train, C_test, p, beta,
+                     var_a, var_b, var_e, seed + 101L)
     X_train <- dat$X_train
     X_ref <- dat$X_ref
     X_test <- dat$X_test

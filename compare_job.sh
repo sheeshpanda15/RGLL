@@ -21,8 +21,8 @@ echo "Host: $HOSTNAME"
 
 if [[ -n "${SLURM_ARRAY_TASK_ID:-}" ]]; then
   task_id=$((SLURM_ARRAY_TASK_ID - 1))
-  model_block=$((task_id / 33))
-  within_model=$((task_id % 33))
+  model_block=$((task_id / 48))
+  within_model=$((task_id % 48))
   case_id=$((within_model / 3 + 1))
   r_index=$((within_model % 3))
   r_values=(10 20 50)
