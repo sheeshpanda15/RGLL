@@ -18,9 +18,10 @@
 #   CIRG   : proposed RASC + SGA, model-matched IMSPE search.
 #
 # IMPORTANT:
-# Under the paper's unknown-group premise, no method receives true groups.
-# OBS, CPF, and BLM are run with pseudo/random labels by default so their
-# grouping machinery can still be stress-tested without leaking hidden labels.
+# Under the paper's unknown-group premise, no feasible method receives true
+# groups. ORACLE is the explicitly infeasible benchmark and uses true groups;
+# OBS, CPF, and BLM use pseudo/random labels by default so their grouping
+# machinery can still be stress-tested without leaking hidden labels.
 #
 # CPF and BLM here are LMM-compatible adaptations, not literal replications of
 # the original papers' model-specific software. The comparison isolates their
@@ -877,7 +878,7 @@ run_comparison_replication <- function(N = 2500, p = 50, R = 20,
     methods <- if (label_policy == "observed") {
       c("ORACLE", "OBS", "LM", "KM", "CPF", "BLM", "CIRG")
     } else {
-      c("LM", "KM", "OBS", "CPF", "BLM", "CIRG")
+      c("ORACLE", "LM", "KM", "OBS", "CPF", "BLM", "CIRG")
     }
   }
   methods <- unique(toupper(trimws(methods)))
@@ -885,9 +886,6 @@ run_comparison_replication <- function(N = 2500, p = 50, R = 20,
   methods <- setdiff(methods, "GMM")
   if (!length(methods)) {
     stop("No runnable methods were requested after removing GMM.")
-  }
-  if (label_policy == "unknown" && "ORACLE" %in% methods) {
-    stop("ORACLE uses true groups and is not allowed when LABEL_POLICY=unknown.")
   }
   beta <- rep(1, p)
   model_type <- if (var_b > 0) "RS" else "RI"
@@ -1090,7 +1088,7 @@ run_method_comparison <- function(N_all = 2500, p = 50, R = 20,
     methods <- if (label_policy == "observed") {
       c("ORACLE", "OBS", "LM", "KM", "CPF", "BLM", "CIRG")
     } else {
-      c("LM", "KM", "OBS", "CPF", "BLM", "CIRG")
+      c("ORACLE", "LM", "KM", "OBS", "CPF", "BLM", "CIRG")
     }
   }
   tasks <- list()

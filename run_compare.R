@@ -56,7 +56,7 @@ VAR_B <- if (MODEL == "RS") get_d("VAR_B", 0.1) else 0
 default_methods <- if (LABEL_POLICY == "observed") {
   "ORACLE,OBS,LM,KM,CPF,BLM,CIRG"
 } else {
-  "LM,KM,OBS,CPF,BLM,CIRG"
+  "ORACLE,LM,KM,OBS,CPF,BLM,CIRG"
 }
 methods <- strsplit(get_s("METHODS", default_methods), ",", fixed = TRUE)[[1]]
 methods <- trimws(methods)
