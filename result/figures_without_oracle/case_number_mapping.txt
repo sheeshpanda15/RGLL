@@ -1,0 +1,22 @@
+Complete figure set: all 16 cases, feasible methods, without Oracle.
+Cases 1-7: selected manuscript cases. Cases 8-16: remaining original cases.
+PDF: vector format for LaTeX. PNG: 300 dpi for image uploads.
+Only the case number in each title has changed; plot data and styling are preserved.
+
+New case | Original case | Description
+1 | 11 | Structured latent predictive effects
+2 | 12 | Continuous predictive heterogeneity
+3 | 13 | Density-prediction conflict
+4 | 14 | Overlapping predictive states
+5 | 15 | Rare high-loss state
+6 | 3 | Group-shifted uniform covariates
+7 | 16 | Target-distribution shift
+8 | 1 | Independent uniform covariates
+9 | 2 | Correlated Gaussian covariates
+10 | 4 | Group-shifted Gaussian covariates
+11 | 5 | Heavy-tailed t covariates
+12 | 6 | Log-normal covariates
+13 | 7 | Two-component Gaussian mixture
+14 | 8 | Mean covariate shift
+15 | 9 | Covariance shift
+16 | 10 | Type structure with nuisance modes
