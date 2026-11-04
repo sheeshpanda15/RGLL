@@ -1,0 +1,25 @@
+% Use \usepackage{graphicx}; compile from the repository root.
+% CODE CASE IDs are not the paper's CASE1--7 IDs.
+\newcommand{\additionalcasefigure}[2]{%
+  \begin{figure}[p]
+    \centering
+    \includegraphics[width=\textwidth]{additional/pdf/CODE_CASE#2_mean_95MC.pdf}
+    \caption{Additional simulation result for code CASE#1. Top:
+    random-intercept model, $\operatorname{Var}(b)=0$; bottom:
+    random-slope model, $\operatorname{Var}(b)=0.10$. Columns correspond to
+    $\operatorname{Var}(a)=0.50$ and $2.25$. Points show mean test MSPE over
+    50 independent repetitions; whiskers are approximate 95\% Monte Carlo
+    intervals (mean $\pm 1.96$ Monte Carlo standard errors). Panel-specific
+    vertical scales are used. Markers are slightly offset horizontally.}
+    \label{fig:additional-code-case#1}
+  \end{figure}%
+}
+\additionalcasefigure{1}{01}
+\additionalcasefigure{2}{02}
+\additionalcasefigure{4}{04}
+\additionalcasefigure{5}{05}
+\additionalcasefigure{6}{06}
+\additionalcasefigure{7}{07}
+\additionalcasefigure{8}{08}
+\additionalcasefigure{9}{09}
+\additionalcasefigure{10}{10}

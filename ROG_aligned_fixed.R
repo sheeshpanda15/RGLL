@@ -36,7 +36,7 @@ if (!exists("fit_rs_lmm_cpp", mode = "function") ||
   if (!file.exists("lmm_fast_aligned.cpp")) {
     stop("Put lmm_fast_aligned.cpp in the working directory before sourcing ROG_aligned.R")
   }
-  Rcpp::sourceCpp("lmm_fast_aligned.cpp")
+  Rcpp::sourceCpp("lmm_fast_aligned.cpp", cacheDir = Sys.getenv("RGLL_RCPP_CACHE", tempdir()))
 }
 
 # ------------------------------- utilities -----------------------------------

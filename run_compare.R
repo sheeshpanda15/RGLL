@@ -1,149 +1,88 @@
 #!/usr/bin/env Rscript
-options(width = 220)
-project_dir <- Sys.getenv("PROJECT_DIR", unset = getwd())
-setwd(project_dir)
+options(width = 180)
+setwd(Sys.getenv("PROJECT_DIR", getwd()))
+cat("[RGLL] Loading main-study R/C++ sources.\n")
 source("ROG_method_comparison.R")
+source("experiment_plan.R")
 
-get_i <- function(name, default) as.integer(Sys.getenv(name, unset = as.character(default)))
-get_d <- function(name, default) as.numeric(Sys.getenv(name, unset = as.character(default)))
-get_s <- function(name, default) Sys.getenv(name, unset = default)
-get_num_list <- function(name, default) {
-  raw <- Sys.getenv(name, unset = "")
-  if (!nzchar(raw)) return(default)
-  as.numeric(trimws(strsplit(raw, ",", fixed = TRUE)[[1]]))
+get_i <- function(name, default) as.integer(Sys.getenv(name, as.character(default)))
+get_d <- function(name, default) as.numeric(Sys.getenv(name, as.character(default)))
+get_s <- function(name, default) Sys.getenv(name, default)
+numbers <- function(name, default) {
+  text <- Sys.getenv(name, "")
+  if (!nzchar(text)) return(default)
+  as.numeric(strsplit(text, ",", fixed = TRUE)[[1]])
 }
-get_int_list <- function(name, default) as.integer(get_num_list(name, default))
+model <- toupper(get_s("MODEL", "RI"))
+case_id <- get_i("CASE", 1L)
+var_a_values <- numbers("VAR_A_LIST", .5)
+r_values <- numbers("R_LIST", c(10L, 20L, 50L))
+nloop <- get_i("NLOOP", 50L)
+first <- get_i("REP_FIRST", 1L); last <- get_i("REP_LAST", nloop)
+mode <- get_s("RUN_MODE", "base")
+if (!model %in% c("RI", "RS") || !case_id %in% 1:16 ||
+    mode != "base" || length(var_a_values) != 1L || !is.finite(var_a_values) || var_a_values < 0)
+  stop("One main-study task must specify one model, CASE and nonnegative Var.a value.")
+if (is.na(nloop) || is.na(first) || is.na(last) || nloop < 1L ||
+    first < 1L || first > last || last > nloop) stop("Invalid replication range.")
+if (!length(r_values) || any(!is.finite(r_values)) || anyDuplicated(r_values))
+  stop("Invalid R_LIST.")
+replications <- seq.int(first, last)
+n_cores <- get_i("N_CORES", 1L)
+base_methods <- c("LM", "KM", "OBS", "CPF", "BLMX", "BLM", "CIRG")
+methods <- base_methods
 
-MODEL <- toupper(get_s("MODEL", "RI"))
-CASE <- get_i("CASE", 1)
-CASE_LIST <- get_int_list("CASE_LIST", CASE)
-LABEL_POLICY <- tolower(get_s("LABEL_POLICY", "unknown"))
-if (!LABEL_POLICY %in% c("unknown", "observed")) {
-  stop("LABEL_POLICY must be unknown or observed.")
-}
-MIS_TYPE <- tolower(get_s("MIS_TYPE", if (LABEL_POLICY == "observed") "contam" else "none"))
-RHO <- get_d("RHO", 0.25)
-NLOOP <- get_i("NLOOP", 20)
-N <- get_i("N", 2500)
-P <- get_i("P", 50)
-R <- get_i("R", 20)
-R_LIST_DEFAULT <- if (nzchar(Sys.getenv("R", unset = ""))) R else c(10L, 20L, 50L)
-VAR_A_SINGLE <- get_d("VAR_A", 2.25)
-VAR_A_LIST_DEFAULT <- if (nzchar(Sys.getenv("VAR_A", unset = ""))) VAR_A_SINGLE else c(0.5, 2.25)
-R_LIST <- get_int_list("R_LIST", R_LIST_DEFAULT)
-VAR_A_LIST <- get_num_list("VAR_A_LIST", VAR_A_LIST_DEFAULT)
-TAU <- get_i("TAU", 5 * (P + 1L))
-LAMBDA <- get_d("LAMBDA", 0)
-CIRG_CRITERION <- toupper(get_s("CIRG_CRITERION", "IMSPE"))
-if (CIRG_CRITERION %in% c("IOPT", "I_OPT", "I-OPT", "I_OPTIMAL", "I-OPTIMAL")) {
-  CIRG_CRITERION <- "I"
-}
-if (!CIRG_CRITERION %in% c("IMSPE", "I")) {
-  stop("CIRG_CRITERION must be IMSPE or I.")
-}
-EM_MAX <- get_i("EM_MAX", 300)
-SA_MAX <- get_i("SA_MAX", 25)
-K_GRID_POINTS <- get_i("K_GRID_POINTS", 8)
-KMEANS_NUM_INIT <- get_i("KMEANS_NUM_INIT", 1)
-KMEANS_MAX_ITERS <- get_i("KMEANS_MAX_ITERS", 25)
-CPF_LAMBDA_POINTS <- get_i("CPF_LAMBDA_POINTS", 6)
-CPF_MAX_ITER <- get_i("CPF_MAX_ITER", 300)
-BLM_NSTART <- get_i("BLM_NSTART", 5)
-N_CORES_DEFAULT <- as.integer(Sys.getenv("SLURM_CPUS_PER_TASK", unset = "1"))
-if (!is.finite(N_CORES_DEFAULT) || N_CORES_DEFAULT < 1L) N_CORES_DEFAULT <- 1L
-N_CORES <- get_i("N_CORES", N_CORES_DEFAULT)
-VAR_B <- if (MODEL == "RS") get_d("VAR_B", 0.1) else 0
-default_methods <- if (LABEL_POLICY == "observed") {
-  "ORACLE,OBS,LM,KM,CPF,BLM,CIRG"
-} else {
-  "ORACLE,LM,KM,OBS,CPF,BLM,CIRG"
-}
-methods <- strsplit(get_s("METHODS", default_methods), ",", fixed = TRUE)[[1]]
-methods <- trimws(methods)
-methods <- toupper(methods[nzchar(methods)])
-methods <- setdiff(methods, "GMM")
-if (!length(methods)) {
-  stop("METHODS has no runnable entries after removing GMM.")
-}
-
-dir.create("results_comparison", showWarnings = FALSE, recursive = TRUE)
-tag_rho <- if (MIS_TYPE == "contam") sprintf("_rho%02d", round(100 * RHO)) else ""
-tag_vb <- if (MODEL == "RS") sprintf("_varb%s", format(VAR_B, trim = TRUE, scientific = FALSE)) else ""
-tag_lambda <- sprintf("_lambda%s", format(LAMBDA, trim = TRUE, scientific = FALSE))
-tag_criterion <- if (CIRG_CRITERION == "IMSPE") "" else "_iopt"
-tag_rgrid <- paste(R_LIST, collapse = "-")
-tag_vagrid <- paste(format(VAR_A_LIST, trim = TRUE, scientific = FALSE), collapse = "-")
-
-cat("============================================================\n")
-cat("Method comparison\n")
-cat("MODEL=", MODEL, " cases=", paste(CASE_LIST, collapse=","),
-    " label_policy=", LABEL_POLICY, " misspec=", MIS_TYPE, " rho=", RHO, "\n", sep="")
-cat("N=", N, " p=", P, " R=", paste(R_LIST, collapse=","), " Var.a=", paste(VAR_A_LIST, collapse=","), "\n", sep="")
-cat("nloop=", NLOOP, " tau=", TAU, " lambda=", LAMBDA,
-    " CIRG_CRITERION=", CIRG_CRITERION, "\n", sep="")
-cat("Budgets: SA_MAX=", SA_MAX, " EM_MAX=", EM_MAX,
-    " K_GRID_POINTS=", K_GRID_POINTS,
-    " KMEANS_NUM_INIT=", KMEANS_NUM_INIT,
-    " KMEANS_MAX_ITERS=", KMEANS_MAX_ITERS,
-    " CPF_LAMBDA_POINTS=", CPF_LAMBDA_POINTS,
-    " CPF_MAX_ITER=", CPF_MAX_ITER,
-    " BLM_NSTART=", BLM_NSTART,
-    " N_CORES=", N_CORES, "\n", sep="")
-cat("Methods: ", paste(methods, collapse=", "), "\n", sep="")
-cat("============================================================\n")
-
-t0 <- proc.time()[3]
-all_runs <- list()
-pos <- 0L
-for (case_id in CASE_LIST) {
-  for (R_value in R_LIST) {
-    for (Var_a in VAR_A_LIST) {
-      pos <- pos + 1L
-      outfile <- sprintf(
-        "results_comparison/%s_case%d_R%d_vara%s%s%s%s_%s%s.rds",
-        MODEL, case_id, R_value,
-        format(Var_a, trim = TRUE, scientific = FALSE),
-        tag_vb, tag_lambda, tag_criterion, MIS_TYPE, tag_rho
-      )
-      cat("\nRunning case=", case_id, " R=", R_value, " Var.a=", Var_a, "\n", sep="")
-      ans <- run_method_comparison(
-        N_all = N, p = P, R = R_value, Var.e = 9, Var.a = Var_a, Var.b = VAR_B,
-        nloop = NLOOP, dist_x = paste0("case", case_id), groupsize = "large",
-        mis_type = MIS_TYPE, rho = RHO, tau = TAU, lambda = LAMBDA,
-        cirg_criterion = CIRG_CRITERION,
-        label_policy = LABEL_POLICY,
-        sa_max_iter = SA_MAX, em_tol = 1e-5, em_max_iter = EM_MAX,
-        k_grid_points = K_GRID_POINTS,
-        kmeans_num_init = KMEANS_NUM_INIT,
-        kmeans_max_iters = KMEANS_MAX_ITERS,
-        cpf_lambda_points = CPF_LAMBDA_POINTS,
-        cpf_max_iter = CPF_MAX_ITER,
-        blm_nstart = BLM_NSTART,
-        n_cores = N_CORES,
-        methods = methods, seed = 12345L
-      )
-      ans$raw$case <- case_id
-      ans$raw$R_setting <- R_value
-      ans$raw$Var_a_setting <- Var_a
-      ans$summary$case <- case_id
-      ans$summary$R_setting <- R_value
-      ans$summary$Var_a_setting <- Var_a
-      saveRDS(ans, outfile)
-      cat("Saved:", outfile, "\n")
-      all_runs[[pos]] <- ans
-    }
-  }
-}
-elapsed <- (proc.time()[3] - t0) / 60
-combined <- list(
-  raw = do.call(rbind, lapply(all_runs, `[[`, "raw")),
-  summary = do.call(rbind, lapply(all_runs, `[[`, "summary"))
+study <- list(
+  N = get_i("N", 2500L), p = get_i("P", 50L), nloop = nloop,
+  var_e = 9, rs_var_b = get_d("VAR_B", .1),
+  label_policy = get_s("LABEL_POLICY", "unknown"), mis_type = get_s("MIS_TYPE", "none"),
+  rho = get_d("RHO", 0), tau = get_i("TAU", 5L * (get_i("P", 50L) + 1L)),
+  lambda = get_d("LAMBDA", 0), criterion = get_s("CIRG_CRITERION", "IMSPE"),
+  sa_max = get_i("SA_MAX", 25L), em_max = get_i("EM_MAX", 300L),
+  k_grid_points = get_i("K_GRID_POINTS", 8L),
+  kmeans_num_init = get_i("KMEANS_NUM_INIT", 1L), kmeans_max_iters = get_i("KMEANS_MAX_ITERS", 25L),
+  cpf_lambda_points = get_i("CPF_LAMBDA_POINTS", 6L), cpf_max_iter = get_i("CPF_MAX_ITER", 300L),
+  blm_nstart = get_i("BLM_NSTART", 5L),
+  base_methods = base_methods,
+  sources = tools::md5sum(c("ROG_aligned_fixed.R", "ROG_method_comparison.R", "literature_baselines.R",
+                           "lmm_fast_aligned.cpp", "run_compare.R", "experiment_plan.R"))
 )
-combined_file <- sprintf("results_comparison/%s_cases%s_R%s_vara%s%s_grid%s_%s%s.rds",
-                         MODEL, paste(CASE_LIST, collapse="-"),
-                         tag_rgrid, tag_vagrid, tag_vb,
-                         paste0(tag_lambda, tag_criterion), MIS_TYPE, tag_rho)
-saveRDS(combined, combined_file)
-cat("\nFinished. Elapsed minutes:", elapsed, "\n")
-cat("Saved combined:", combined_file, "\n\n")
-print(combined$summary)
+cat("[RGLL] Component=", mode, " model=", model, " CASE=", case_id,
+    " R=", paste(r_values, collapse = ","), " Var.a=", paste(var_a_values, collapse = ","),
+    " repetitions=", first, "-", last, " N_CORES=", n_cores, "\n", sep = "")
+runs <- list()
+for (r in r_values) for (var_a in var_a_values) {
+  ans <- run_method_comparison(
+    N_all = study$N, p = study$p, R = r, Var.e = study$var_e, Var.a = var_a,
+    Var.b = if (model == "RS") study$rs_var_b else 0,
+    nloop = nloop, dist_x = paste0("case", case_id), groupsize = "large",
+    mis_type = study$mis_type, rho = study$rho, tau = study$tau, lambda = study$lambda,
+    cirg_criterion = study$criterion, label_policy = study$label_policy,
+    sa_max_iter = study$sa_max, em_tol = 1e-5, em_max_iter = study$em_max,
+    k_grid_points = study$k_grid_points, kmeans_num_init = study$kmeans_num_init,
+    kmeans_max_iters = study$kmeans_max_iters, cpf_lambda_points = study$cpf_lambda_points,
+    cpf_max_iter = study$cpf_max_iter, blm_nstart = study$blm_nstart,
+    n_cores = n_cores, methods = methods, seed = 12345L,
+    replication_ids = replications, keep_extra = FALSE, verbose = TRUE)
+  if (!ans$complete) stop("Task incomplete; no final result will be saved.")
+  ans$raw$model <- model; ans$raw$case <- case_id
+  ans$raw$R_setting <- r; ans$raw$Var_a_setting <- var_a
+  ans$summary$model <- model; ans$summary$case <- case_id
+  ans$summary$R_setting <- r; ans$summary$Var_a_setting <- var_a
+  runs[[length(runs) + 1L]] <- ans
+}
+result <- list(
+  raw = do.call(rbind, lapply(runs, `[[`, "raw")),
+  summary = do.call(rbind, lapply(runs, `[[`, "summary")),
+  diagnostics = lapply(runs, `[[`, "diagnostics"),
+  complete = TRUE, config = study,
+  task = list(component = mode, model = model, case = case_id, Var_a = paste(var_a_values, collapse = ","),
+              R_list = paste(r_values, collapse = ","), rep_first = first, rep_last = last,
+              backend = "cpu"),
+  implementation = "main_study_v1"
+)
+directory <- get_s("RESULT_DIR", "result/results_main")
+outfile <- file.path(directory, "tasks",
+  task_result_name(mode, model, case_id, paste(r_values, collapse = ","), paste(var_a_values, collapse = ","), first, last))
+atomic_save_rds(result, outfile)
+cat("[RGLL] COMPLETE. Saved one final result:", outfile, "\n")
