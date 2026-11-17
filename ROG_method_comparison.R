@@ -12,9 +12,6 @@
 #            grouped observations. Pairwise MCP fusion is applied to observed-
 #            group intercepts via ADMM, then the fused labels are used in the
 #            legacy RI/RS LMM fitting/prediction pipeline.
-#   BLMX   : BLM moment classification, eq. (6) K selection and Gaussian grouped
-#            fixed effects. Not applicable without observed informative moments
-#            and their sampling-error variance (or panel data to estimate them).
 #   BLM    : Bonhomme-Lamadon-Manresa-style two-step discretization. Informative
 #            group-level moments are estimated in step 1, K-means discretizes
 #            those moments in step 2, then the same RI/RS LMM is fitted.
@@ -27,11 +24,10 @@
 # machinery can still be stress-tested without leaking hidden labels.
 #
 # CPF and BLM here are LMM-compatible adaptations, not literal replications of
-# the original papers' model-specific software. BLMX retains a paper-aligned
-# training estimator with explicit input requirements in literature_baselines.R.
+# the original papers' model-specific software.
 # -----------------------------------------------------------------------------
 
-if (!exists("run_cirg_simulation", mode = "function")) {
+if (!exists("cirg_search", mode = "function")) {
   if (!file.exists("ROG_aligned_fixed.R")) stop("ROG_aligned_fixed.R not found.")
   source("ROG_aligned_fixed.R")
 }
@@ -466,8 +462,6 @@ fit_blm_discretization <- function(X, y, observed_labels,
   best
 }
 
-source("literature_baselines.R")
-
 # ---------------------------- result utilities --------------------------------
 
 metric_row <- function(method, fit, pred, y_test, beta, var_a, var_b, var_e,
@@ -486,25 +480,6 @@ metric_row <- function(method, fit, pred, y_test, beta, var_a, var_b, var_e,
   d$training_estimator <- if (method == "LM") "OLS" else "LMM"
   d$prediction_rule <- "existing_pipeline"
   d$solver_backend <- "cpu"
-  d
-}
-
-literature_metric_row <- function(method, estimate, pred, y_test, beta,
-                                   var_a, var_b, var_e, G_true, runtime,
-                                   ari = NA_real_, status = "ok", detail = NA_character_) {
-  ok <- !is.null(estimate) && isTRUE(estimate$converged)
-  fit <- list(beta = c(NA_real_, if (ok) as.numeric(estimate$beta) else rep(NA_real_, length(beta))),
-              Var.a = NA_real_, Var.b = NA_real_,
-              Var.e = if (ok) estimate$residual_variance else NA_real_,
-              converged = ok,
-              iterations = if (is.null(estimate$iterations)) NA_integer_ else estimate$iterations)
-  d <- metric_row(method, fit, pred, y_test, beta, var_a, var_b, var_e,
-                  G_true, if (ok) estimate$K else NA_integer_, runtime, ari)
-  d$status <- status
-  d$status_detail <- detail
-  d$training_estimator <- "BLM_Gaussian_GFE"
-  d$prediction_rule <- "not_available"
-  if (status == "not_applicable") d$converged <- NA
   d
 }
 
@@ -900,7 +875,6 @@ run_comparison_replication <- function(N = 2500, p = 50, R = 20,
                                        kmeans_max_iters = 25L,
                                        cpf_lambda_points = 6L,
                                        cpf_max_iter = 300L,
-                                       blmx_moment_provider = NULL,
                                        blm_nstart = 5L,
                                        seed = 12345L,
                                        methods = NULL,
@@ -910,14 +884,14 @@ run_comparison_replication <- function(N = 2500, p = 50, R = 20,
   label_policy <- match.arg(label_policy)
   if (is.null(methods)) {
     methods <- if (label_policy == "observed") {
-      c("ORACLE", "OBS", "LM", "KM", "CPF", "BLMX", "BLM", "CIRG")
+      c("ORACLE", "OBS", "LM", "KM", "CPF", "BLM", "CIRG")
     } else {
-      c("ORACLE", "LM", "KM", "OBS", "CPF", "BLMX", "BLM", "CIRG")
+      c("ORACLE", "LM", "KM", "OBS", "CPF", "BLM", "CIRG")
     }
   }
   methods <- unique(toupper(trimws(methods)))
   methods <- methods[nzchar(methods)]
-  if (!length(methods) || !all(methods %in% c("ORACLE", "OBS", "LM", "KM", "CPF", "BLMX", "BLM", "CIRG")))
+  if (!length(methods) || !all(methods %in% c("ORACLE", "OBS", "LM", "KM", "CPF", "BLM", "CIRG")))
     stop("Unknown comparison method.")
   beta <- rep(1, p)
   model_type <- if (var_b > 0) "RS" else "RI"
@@ -1047,36 +1021,6 @@ run_comparison_replication <- function(N = 2500, p = 50, R = 20,
     extra$BLM <- blm
   }
 
-  if ("BLMX" %in% methods) {
-    t0 <- proc.time()[3]
-    pred <- rep(NA_real_, nrow(X_test)); blmx <- NULL
-    status <- "not_applicable"
-    detail <- "No observed individual moments and sampling-error variance; hidden IDs are not used"
-    if (!is.null(blmx_moment_provider)) {
-      if (!is.function(blmx_moment_provider)) stop("blmx_moment_provider must be a function.")
-      # No test responses, true labels, or latent effects enter this interface.
-      input <- blmx_moment_provider(X_train, resp$y_train, X_test)
-      blmx <- fit_blm_original(
-        X_train, resp$y_train, moments = input$moments,
-        row_unit = if (is.null(input$row_unit)) seq_len(nrow(X_train)) else input$row_unit,
-        moment_variance = input$moment_variance,
-        K = input$K, K_max = if (is.null(input$K_max)) nrow(input$moments) else input$K_max,
-        seed = seed + 653L, nstart = max(20L, blm_nstart)
-      )
-      status <- blmx$status; detail <- NA_character_
-      if (blmx$converged) {
-        pred <- predict_blm_original(blmx, X_test, input$moments_new, input$known_unit)
-      }
-    }
-    d <- literature_metric_row("BLMX", blmx, pred, resp$y_test,
-                                beta, var_a, var_b, var_e, G_true,
-                                proc.time()[3] - t0, status = status, detail = detail)
-    if (!is.null(blmx) && blmx$converged)
-      d$prediction_rule <- if (is.null(input$known_unit)) "moment_centroid_extension" else "known_unit"
-    add(d)
-    extra$BLMX <- if (is.null(blmx)) list(status = status, detail = detail) else blmx
-  }
-
   if ("CIRG" %in% methods) {
     t0 <- proc.time()[3]
     search <- cirg_search(X_train, resp$y_train, X_ref,
@@ -1114,8 +1058,6 @@ run_comparison_replication <- function(N = 2500, p = 50, R = 20,
   raw$label_source <- NA_character_
   raw$label_source[raw$method %in% c("OBS", "CPF", "BLM")] <-
     if (label_policy == "unknown") "random_pseudo" else "observed"
-  raw$label_source[raw$method == "BLMX"] <- if (is.null(blmx_moment_provider))
-    "required_moments_unavailable" else "supplied_individual_moments"
   raw$cirg_criterion[raw$method != "CIRG"] <- NA_character_
   raw$R_true <- R
   raw$N_test <- N
@@ -1140,7 +1082,6 @@ run_method_comparison <- function(N_all = 2500, p = 50, R = 20,
                                   kmeans_max_iters = 25L,
                                   cpf_lambda_points = 6L,
                                   cpf_max_iter = 300L,
-                                  blmx_moment_provider = NULL,
                                   blm_nstart = 5L,
                                   n_cores = 1L,
                                   seed = 12345L,
@@ -1152,13 +1093,13 @@ run_method_comparison <- function(N_all = 2500, p = 50, R = 20,
   label_policy <- match.arg(label_policy)
   if (is.null(methods)) {
     methods <- if (label_policy == "observed") {
-      c("ORACLE", "OBS", "LM", "KM", "CPF", "BLMX", "BLM", "CIRG")
+      c("ORACLE", "OBS", "LM", "KM", "CPF", "BLM", "CIRG")
     } else {
-      c("ORACLE", "LM", "KM", "OBS", "CPF", "BLMX", "BLM", "CIRG")
+      c("ORACLE", "LM", "KM", "OBS", "CPF", "BLM", "CIRG")
     }
   }
   methods <- unique(toupper(methods))
-  if (!length(methods) || !all(methods %in% c("ORACLE", "OBS", "LM", "KM", "CPF", "BLMX", "BLM", "CIRG")))
+  if (!length(methods) || !all(methods %in% c("ORACLE", "OBS", "LM", "KM", "CPF", "BLM", "CIRG")))
     stop("Unknown comparison method.")
   if (!length(replication_ids) || anyNA(replication_ids) ||
       any(replication_ids != as.integer(replication_ids)) ||
@@ -1190,21 +1131,16 @@ run_method_comparison <- function(N_all = 2500, p = 50, R = 20,
         kmeans_max_iters = kmeans_max_iters,
         cpf_lambda_points = cpf_lambda_points,
         cpf_max_iter = cpf_max_iter,
-        blmx_moment_provider = blmx_moment_provider,
         blm_nstart = blm_nstart,
         seed = task$seed, methods = method, verbose = verbose
       )
       d <- ans$metrics
       d$replication <- task$r
       d$N_setting <- task$N
-      diagnostics <- lapply(ans$extra[intersect(names(ans$extra), "BLMX")],
-                            function(x) x[intersect(names(x), c("status", "detail", "trace", "classification"))])
-      piece <- list(raw = d, extra = if (keep_extra) ans$extra else NULL,
-                    diagnostics = diagnostics)
-      pieces[[method]] <- piece
+      pieces[[method]] <- list(raw = d, extra = if (keep_extra) ans$extra else NULL)
     }
     list(raw = do.call(rbind, lapply(pieces, `[[`, "raw")),
-         extra = lapply(pieces, `[[`, "extra"), diagnostics = lapply(pieces, `[[`, "diagnostics"))
+         extra = lapply(pieces, `[[`, "extra"))
   }
   n_cores <- max(1L, as.integer(n_cores))
   if (n_cores > 1L && .Platform$OS.type != "windows") {
@@ -1221,7 +1157,6 @@ run_method_comparison <- function(N_all = 2500, p = 50, R = 20,
   if (is.null(raw)) raw <- data.frame()
   summary <- if (nrow(raw)) summarize_comparison(raw) else data.frame()
   list(raw = raw, summary = summary, extra = extra_all,
-       diagnostics = lapply(res, `[[`, "diagnostics"),
        complete = nrow(raw) == length(tasks) * length(methods),
        expected_rows = length(tasks) * length(methods),
        missing_rows = length(tasks) * length(methods) - nrow(raw),

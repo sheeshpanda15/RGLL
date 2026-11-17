@@ -13,12 +13,11 @@ In particular, cancel the abandoned CPFO job if it is still running:
 scancel 38111202
 ```
 
-Copy these nine root-level runtime files to ~/RGSS (or a clean project folder):
+Copy these eight root-level runtime files to ~/RGSS (or a clean project folder):
 
 ```text
 ROG_aligned_fixed.R
 ROG_method_comparison.R
-literature_baselines.R
 lmm_fast_aligned.cpp
 experiment_plan.R
 run_compare.R
@@ -50,13 +49,11 @@ This submits 64 independent ordinary Slurm jobs:
 
 - RI and RS x CASE1-CASE16 x Var.a=0.5/2.25.
 - Each job fixes model, CASE and Var.a, runs R=10/20/50, 50 repetitions each.
-- Methods: LM, KM, OBS, CPF, BLMX, BLM and CIRG.
+- Methods: LM, KM, OBS, CPF, BLM and CIRG (PGR).
 - Eight CPUs, 100 GB RAM and 48 hours per job.
 - Each job has its own log and END/FAIL/TIME_LIMIT mail to k21181837@kcl.ac.uk.
 
-BLMX is recorded as not_applicable because informative individual moments are
-unavailable in the unknown-identity design. It is not a successful fitted method.
-True labels are used for evaluation only, not as inputs to these seven methods.
+True labels are used for evaluation only in the main run.
 Data generators, fitting settings and replication seed rules are unchanged.
 
 There are no job arrays, dependency chains, test jobs, controllers, automatic
@@ -108,11 +105,14 @@ Rscript collect_results.R result/results_main
 Collection does not load packages, compile C++ or fit models. It checks all 64
 files, identical configurations, task metadata, method/setting/replication
 coverage and duplicate rows before writing result/results_main/main_results.rds.
-At 50 repetitions the output has 67200 raw rows, including 9600 BLMX
-not_applicable rows, plus per-setting summaries and Monte Carlo standard errors.
+At 50 repetitions a new run has 57600 raw rows, plus per-setting summaries
+and Monte Carlo standard errors. The archived runs still include their 9600
+BLMX `not_applicable` rows.
 File completeness does not imply all fits converged: inspect status and
 convergence rates before interpreting the results.
 
 An older complete and internally consistent set of 64 final BASE files can
-still be collected by passing its directory. Do not mix old and new source
-fingerprints in one run. Old per-setting checkpoint files are not imported.
+still be collected by passing its directory. To keep the archived tasks and
+run the cleaned code, set `RESULT_DIR` to a fresh directory when submitting
+and pass that same directory to the collector. Old per-setting checkpoint
+files are not imported.

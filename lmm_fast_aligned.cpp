@@ -54,10 +54,6 @@ double rel_vec_change(const vec& a, const vec& b) {
   return arma::norm(a - b, 2) / (1.0 + arma::norm(b, 2));
 }
 
-double rel_mat_change(const mat& a, const mat& b) {
-  return arma::norm(a - b, "fro") / (1.0 + arma::norm(b, "fro"));
-}
-
 std::vector<int> positive_sizes(Rcpp::IntegerVector nc) {
   std::vector<int> out;
   out.reserve(nc.size());
@@ -551,126 +547,6 @@ Rcpp::List imspe_rs_cpp(const arma::mat& xx,
     Rcpp::Named("Var.b") = rs_var_b(fit.G),
     Rcpp::Named("Var.e") = fit.ve,
     Rcpp::Named("Information") = M,
-    Rcpp::Named("u_hat") = fit.uhat,
-    Rcpp::Named("converged") = fit.converged,
-    Rcpp::Named("iterations") = fit.iterations
-  );
-}
-
-// -------------------------------------------------------------------------
-// Backward-compatible wrappers.  They now use convergence-based fits.
-// -------------------------------------------------------------------------
-
-// [[Rcpp::export]]
-Rcpp::List count_info_cpp(const arma::mat& xx,
-                          const arma::vec& yy,
-                          Rcpp::IntegerVector nc,
-                          int R,
-                          int p,
-                          double tol = 1e-6,
-                          int max_iter = 100) {
-  RIFit fit = fit_ri_internal(xx, yy, nc, tol, max_iter);
-  double detv = arma::det(fit.information);
-  if (!arma::is_finite(detv) || detv <= 0.0) detv = 1e-50;
-  double Aval = arma::trace(safe_inv_spd(fit.information));
-  return Rcpp::List::create(
-    Rcpp::Named("D") = detv,
-    Rcpp::Named("A") = Aval,
-    Rcpp::Named("Information") = fit.information,
-    Rcpp::Named("beta") = fit.beta,
-    Rcpp::Named("Var.a") = fit.va,
-    Rcpp::Named("Var.e") = fit.ve,
-    Rcpp::Named("u_hat") = fit.uhat,
-    Rcpp::Named("converged") = fit.converged,
-    Rcpp::Named("iterations") = fit.iterations
-  );
-}
-
-// [[Rcpp::export]]
-Rcpp::List count_info_rs_cpp(const arma::mat& xx,
-                             const arma::vec& yy,
-                             Rcpp::IntegerVector nc,
-                             int R,
-                             int p,
-                             double tol = 1e-6,
-                             int max_iter = 100) {
-  RSFit fit = fit_rs_internal(xx, yy, nc, tol, max_iter);
-  double detv = arma::det(fit.information);
-  if (!arma::is_finite(detv) || detv <= 0.0) detv = 1e-50;
-  double Aval = arma::trace(safe_inv_spd(fit.information));
-  return Rcpp::List::create(
-    Rcpp::Named("D") = detv,
-    Rcpp::Named("A") = Aval,
-    Rcpp::Named("Information") = fit.information,
-    Rcpp::Named("beta") = fit.beta,
-    Rcpp::Named("G") = fit.G,
-    Rcpp::Named("Var.a") = fit.G(0,0),
-    Rcpp::Named("Var.b") = rs_var_b(fit.G),
-    Rcpp::Named("Var.e") = fit.ve,
-    Rcpp::Named("u_hat") = fit.uhat,
-    Rcpp::Named("converged") = fit.converged,
-    Rcpp::Named("iterations") = fit.iterations
-  );
-}
-
-// [[Rcpp::export]]
-Rcpp::List Est_hat_cpp(const arma::mat& xx,
-                       const arma::vec& yy,
-                       const arma::vec& beta_true,
-                       double Var_a_true,
-                       double Var_e_true,
-                       Rcpp::IntegerVector nc,
-                       int R,
-                       int p,
-                       double tol = 1e-6,
-                       int max_iter = 100) {
-  RIFit fit = fit_ri_internal(xx, yy, nc, tol, max_iter);
-  vec slope = fit.beta.subvec(1, p);
-  double bt_mse = arma::accu(arma::square(slope - beta_true));
-  double bt0_mse = std::pow(fit.beta[0] - 1.0, 2.0);
-  double va_mse = std::pow(fit.va - Var_a_true, 2.0);
-  double ve_mse = std::pow(fit.ve - Var_e_true, 2.0);
-  return Rcpp::List::create(
-    Rcpp::Named("bt.mse") = bt_mse,
-    Rcpp::Named("va.mse") = va_mse,
-    Rcpp::Named("ve.mse") = ve_mse,
-    Rcpp::Named("bt0.mse") = bt0_mse,
-    Rcpp::Named("beta2") = fit.beta,
-    Rcpp::Named("Var.a") = fit.va,
-    Rcpp::Named("Var.e") = fit.ve,
-    Rcpp::Named("u_hat") = fit.uhat,
-    Rcpp::Named("converged") = fit.converged,
-    Rcpp::Named("iterations") = fit.iterations
-  );
-}
-
-// [[Rcpp::export]]
-Rcpp::List Est_hat_RS_cpp(const arma::mat& xx,
-                          const arma::vec& yy,
-                          const arma::vec& beta_true,
-                          double Var_a_true,
-                          double Var_e_true,
-                          Rcpp::IntegerVector nc,
-                          int R,
-                          int p,
-                          double tol = 1e-6,
-                          int max_iter = 100) {
-  RSFit fit = fit_rs_internal(xx, yy, nc, tol, max_iter);
-  vec slope = fit.beta.subvec(1, p);
-  double bt_mse = arma::accu(arma::square(slope - beta_true));
-  double bt0_mse = std::pow(fit.beta[0] - 1.0, 2.0);
-  double va_mse = std::pow(fit.G(0,0) - Var_a_true, 2.0);
-  double ve_mse = std::pow(fit.ve - Var_e_true, 2.0);
-  return Rcpp::List::create(
-    Rcpp::Named("bt.mse") = bt_mse,
-    Rcpp::Named("va.mse") = va_mse,
-    Rcpp::Named("ve.mse") = ve_mse,
-    Rcpp::Named("bt0.mse") = bt0_mse,
-    Rcpp::Named("beta2") = fit.beta,
-    Rcpp::Named("Var.a") = fit.G(0,0),
-    Rcpp::Named("Var.b") = rs_var_b(fit.G),
-    Rcpp::Named("Var.e") = fit.ve,
-    Rcpp::Named("G.hat") = fit.G,
     Rcpp::Named("u_hat") = fit.uhat,
     Rcpp::Named("converged") = fit.converged,
     Rcpp::Named("iterations") = fit.iterations

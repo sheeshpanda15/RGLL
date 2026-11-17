@@ -26,20 +26,12 @@
 - `figures/`：9张同名360 dpi PNG，供预览或位图系统使用。
 - 上排为RI、下排为RS；左列Var(a)=0.50、右列Var(a)=2.25。
 - RI的Var(b)=0，RS的Var(b)=0.10；该固定设置在配套图注中说明。
-- CIRG、KM、BLM、CPF、OBS、LM的颜色、点形、线型和坐标名称与正文单CASE图一致。
+- PGR、KM、BLM、CPF、OBS、LM的颜色、点形、线型和坐标名称与正文单CASE图一致。PGR是结果数据中CIRG方法的展示名称，代码内部标识和实验数值不变。
 - 每个点是50次重复的平均测试MSPE；上下界为均值加减1.96倍Monte Carlo标准误（MCSE=样本标准差/sqrt(50)）。这是均值的近似95% Monte Carlo区间，不是单次实验的波动范围或预测区间。
 - 每张图72个点，均有上下界；四个面板分别使用自身的纵轴刻度，无断轴。方法略作横向错位以避免重叠，不代表R取值不同。
 - 保留全部有限预测，不删除未收敛记录；BLMX在当前设定下不适用，不绘制。
 - 图内不加CASE大标题和解释性段落；编号由文件名和论文图注标识。
 
-## 复现与图注
-
-从项目根目录执行：
-
-```bash
-Rscript output/source/export_paper_figures.R result/results_main/main_results.rds additional additional
-```
-
-命令仅读取本轮最终结果，生成本目录中的派生图片，不拟合模型、不提交任务、不修改原始结果或已生成的七张论文图。
+## 图注与来源
 
 `figure_captions.tex` 提供九张图的LaTeX插图代码和英文图注。`source/additional_figure_statistics.rds` 保存648个绘图点的统计量、原始代码CASE编号、收敛计数、结果文件指纹；`source/figure_manifest.rds` 保存图像清单。

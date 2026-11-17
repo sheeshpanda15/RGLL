@@ -5,6 +5,14 @@ cat("[RGLL] Loading main-study R/C++ sources.\n")
 source("ROG_method_comparison.R")
 source("experiment_plan.R")
 
+atomic_save_rds <- function(object, path, compress = TRUE) {
+  dir.create(dirname(path), recursive = TRUE, showWarnings = FALSE)
+  tmp <- tempfile(pattern = ".result-", tmpdir = dirname(path))
+  on.exit(unlink(tmp), add = TRUE)
+  saveRDS(object, tmp, compress = compress)
+  if (!file.rename(tmp, path)) stop("Cannot replace result: ", path)
+}
+
 get_i <- function(name, default) as.integer(Sys.getenv(name, as.character(default)))
 get_d <- function(name, default) as.numeric(Sys.getenv(name, as.character(default)))
 get_s <- function(name, default) Sys.getenv(name, default)
@@ -29,7 +37,7 @@ if (!length(r_values) || any(!is.finite(r_values)) || anyDuplicated(r_values))
   stop("Invalid R_LIST.")
 replications <- seq.int(first, last)
 n_cores <- get_i("N_CORES", 1L)
-base_methods <- c("LM", "KM", "OBS", "CPF", "BLMX", "BLM", "CIRG")
+base_methods <- c("LM", "KM", "OBS", "CPF", "BLM", "CIRG")
 methods <- base_methods
 
 study <- list(
@@ -44,7 +52,7 @@ study <- list(
   cpf_lambda_points = get_i("CPF_LAMBDA_POINTS", 6L), cpf_max_iter = get_i("CPF_MAX_ITER", 300L),
   blm_nstart = get_i("BLM_NSTART", 5L),
   base_methods = base_methods,
-  sources = tools::md5sum(c("ROG_aligned_fixed.R", "ROG_method_comparison.R", "literature_baselines.R",
+  sources = tools::md5sum(c("ROG_aligned_fixed.R", "ROG_method_comparison.R",
                            "lmm_fast_aligned.cpp", "run_compare.R", "experiment_plan.R"))
 )
 cat("[RGLL] Component=", mode, " model=", model, " CASE=", case_id,
@@ -74,7 +82,6 @@ for (r in r_values) for (var_a in var_a_values) {
 result <- list(
   raw = do.call(rbind, lapply(runs, `[[`, "raw")),
   summary = do.call(rbind, lapply(runs, `[[`, "summary")),
-  diagnostics = lapply(runs, `[[`, "diagnostics"),
   complete = TRUE, config = study,
   task = list(component = mode, model = model, case = case_id, Var_a = paste(var_a_values, collapse = ","),
               R_list = paste(r_values, collapse = ","), rep_first = first, rep_last = last,

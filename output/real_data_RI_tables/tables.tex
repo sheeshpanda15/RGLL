@@ -1,0 +1,90 @@
+% Requires \usepackage{booktabs} in the preamble.
+% Replace each old table from \begin{table} through \end{table}.
+
+% Source: result/real_data_latest/student_results.rds
+\begin{table}[!htbp]
+  \centering
+  \small
+  \caption{Test prediction performance on the Student Performance dataset.}
+  \label{tab:real-ri-student}
+  \begin{tabular}{@{}lcc@{}}
+    \toprule
+    Method or grouping rule & RI & RS \\
+    \midrule
+    \multicolumn{3}{@{}l}{\textbf{Excl (primary comparison)}\enspace (50 common splits)} \\
+    PGR & $\mathbf{0.860683}\,(0.014304)$ & $\mathbf{0.860640}\,(0.014308)$\textsuperscript{2} \\
+    KM & $0.860699\,(0.014305)$ & $0.860652\,(0.014308)$ \\
+    BLM & $0.872440\,(0.014408)$ & $0.860696\,(0.014305)$ \\
+    CPF & $0.860696\,(0.014305)$ & $0.860696\,(0.014305)$ \\
+    OBS & $0.861342\,(0.014297)$ & $0.862264\,(0.014336)$\textsuperscript{43} \\
+    LM & $0.860696\,(0.014305)$ & $0.860696\,(0.014305)$ \\
+    \midrule
+    \multicolumn{3}{@{}l}{\textbf{Full}\enspace (49 common splits)} \\
+    PGR & $\mathbf{0.827413}\,(0.013516)$ & $\mathbf{0.827016}\,(0.013511)$\textsuperscript{10} \\
+    KM & $0.827807\,(0.013547)$ & $0.827495\,(0.013540)$\textsuperscript{9} \\
+    BLM & $0.840472\,(0.013496)$ & $0.827434\,(0.013512)$ \\
+    CPF & $0.827434\,(0.013512)$ & $0.827434\,(0.013512)$ \\
+    OBS & $0.828278\,(0.013455)$\textsuperscript{4} & $0.830008\,(0.013562)$\textsuperscript{47} \\
+    LM & $0.827434\,(0.013512)$ & $0.827434\,(0.013512)$ \\
+    \addlinespace
+    \multicolumn{3}{@{}l}{\emph{Grouping rules based on observed variables}} \\
+    Study time & $0.829508\,(0.013572)$ & $0.829517\,(0.013585)$\textsuperscript{22} \\
+    School choice reason & $0.827635\,(0.013503)$ & $0.828114\,(0.013519)$\textsuperscript{26} \\
+    Going out & $0.829169\,(0.013055)$\textsuperscript{2} & $0.828829\,(0.012912)$\textsuperscript{35} \\
+    Parental education & $0.829295\,(0.013617)$\textsuperscript{1} & $0.832150\,(0.013472)$\textsuperscript{45} \\
+    Study time $\times$ School choice reason & $0.827533\,(0.013359)$\textsuperscript{1} & $0.827201\,(0.013236)$\textsuperscript{43} \\
+    Study time $\times$ Going out & $0.833191\,(0.013494)$\textsuperscript{4} & $0.837742\,(0.013457)$\textsuperscript{48} \\
+    Study time $\times$ Parental education & $0.831699\,(0.013378)$\textsuperscript{6} & $0.844938\,(0.013798)$\textsuperscript{46} \\
+    School choice reason $\times$ Going out & $0.832521\,(0.013214)$\textsuperscript{1} & $0.837781\,(0.013068)$\textsuperscript{43} \\
+    School choice reason $\times$ Parental education & $0.829273\,(0.013489)$\textsuperscript{8} & $0.841867\,(0.013154)$\textsuperscript{48} \\
+    Going out $\times$ Parental education & $0.831299\,(0.013466)$\textsuperscript{8} & $0.850546\,(0.013342)$\textsuperscript{47} \\
+    \bottomrule
+  \end{tabular}
+  \par\smallskip
+  \begin{minipage}{\linewidth}
+    \footnotesize\raggedright
+    Entries are mean test MSPE (Monte Carlo standard error) on the training-standardized response scale. RI uses random intercepts and RS adds random slopes. LM is the pooled baseline in both columns. The response is the final grade. Excl removes course, address, parental cohabitation, study time, reason for school choice, going out, and parental education variables from Full. The grouped fits in Full use labels defined by observed variables. OBS, CPF, and BLM use pseudo-groups. Full excludes split 48 for all rows because a method failed. Bold denotes the lowest displayed mean within each panel and column. Superscripts count fits that reached the iteration limit and produced finite predictions.
+  \end{minipage}
+\end{table}
+
+% Source: result/public_data_RI/beijing_results.rds
+% Source: result/public_data_RS/beijing_results.rds
+% Source: result/public_data_RS/beijing_full_original_group_results.rds
+\begin{table}[!htbp]
+  \centering
+  \small
+  \caption{Test prediction performance on the Beijing Multi-Site Air Quality dataset.}
+  \label{tab:real-ri-beijing}
+  \begin{tabular}{@{}lcc@{}}
+    \toprule
+    Method or grouping rule & RI & RS \\
+    \midrule
+    \multicolumn{3}{@{}l}{\textbf{Excl (primary comparison)}\enspace (50 common splits)} \\
+    PGR & $\mathbf{0.545220}\,(0.007067)$ & $\mathbf{0.512876}\,(0.006732)$ \\
+    KM & $0.546427\,(0.006546)$ & $0.541835\,(0.006025)$ \\
+    BLM & $0.563256\,(0.007148)$ & $0.562731\,(0.007158)$ \\
+    CPF & $0.563267\,(0.007149)$ & $0.563312\,(0.007150)$ \\
+    OBS & $0.562792\,(0.007154)$ & $0.562934\,(0.007160)$ \\
+    LM & $0.562731\,(0.007158)$ & $0.562731\,(0.007158)$ \\
+    \midrule
+    \multicolumn{3}{@{}l}{\textbf{Full}\enspace (50 common splits)} \\
+    PGR & $0.409832\,(0.006396)$ & $0.426577\,(0.012542)$\textsuperscript{1} \\
+    KM & $0.421037\,(0.006050)$ & $0.761706\,(0.026522)$\textsuperscript{2} \\
+    BLM & $0.406885\,(0.006392)$ & $0.406530\,(0.006402)$ \\
+    CPF & $0.406914\,(0.006398)$ & $0.406951\,(0.006397)$ \\
+    OBS & $0.406583\,(0.006399)$ & $0.406738\,(0.006405)$ \\
+    LM & $0.406530\,(0.006402)$ & $0.406530\,(0.006402)$ \\
+    \addlinespace
+    \multicolumn{3}{@{}l}{\emph{Grouping rules based on observed variables}} \\
+    Monitoring station & $\mathbf{0.402906}\,(0.006319)$ & $0.401513\,(0.006299)$ \\
+    Season & $0.412603\,(0.006763)$ & $0.406154\,(0.007405)$ \\
+    Station $\times$ season & $0.406012\,(0.006587)$ & $\mathbf{0.383553}\,(0.005261)$\textsuperscript{2} \\
+    \bottomrule
+  \end{tabular}
+  \par\smallskip
+  \begin{minipage}{\linewidth}
+    \footnotesize\raggedright
+    Entries are mean test MSPE (Monte Carlo standard error) on the training-standardized response scale. RI uses random intercepts and RS adds random slopes. LM is the pooled baseline in both columns. The response is the log of one plus daily mean PM2.5. Excl uses weather observed on the test day. Full adds annual cycle and year terms. Test observations come from held-out 28-day blocks with a two-day purge at either edge. The grouped fits in Full use labels defined by observed variables. OBS, CPF, and BLM use pseudo-groups. Bold denotes the lowest displayed mean within each panel and column. Superscripts count fits that reached the iteration limit and produced finite predictions. Beijing was selected after comparing Excl and Full results for Beijing, UCI apartment rents, and NLSY79 under RS.
+  \end{minipage}
+\end{table}
+
