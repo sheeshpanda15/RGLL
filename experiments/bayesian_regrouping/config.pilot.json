@@ -1,0 +1,17 @@
+{
+  "experiment": {"case": 1, "generating_R": 10, "var_a": 0.5, "var_b": 0.0, "repetitions": 5},
+  "methods": ["mfm", "dpm", "ppmx"],
+  "sampler": {"chains": 2, "workers": 2, "warmup": 80, "draws": 60, "thin": 2, "checkpoint_every": 10},
+  "lmm": {"beta_variance": 100, "residual": {"shape": 2.5, "scale": 4.0}, "intercept": {"shape": 2.5, "scale": 1.0}, "slope": {"shape": 2.5, "scale": 0.1}},
+  "mfm": {"component_support": 64, "geometric_probability": 0.25, "gamma": 1.0},
+  "dpm": {"alpha": 1.0, "alpha_prior_shape": 2.0, "alpha_prior_rate": 1.0, "alpha_log_step": 0.35},
+  "ppmx": {"alpha": 1.0},
+  "similarity": {"mean_precision": 5.0, "within_variance": 1.0},
+  "evaluation": {"pair_budget": 20000, "conditional_draws": 12, "small_group_below": 10, "em_tolerance": 0.00001, "em_iterations": 300},
+  "sensitivity": {
+    "mfm_support": {"method": "mfm", "spec": {"mfm": {"component_support": 128}}},
+    "mfm_prior": {"method": "mfm", "spec": {"mfm": {"geometric_probability": 0.15}}},
+    "dpm_alpha": {"method": "dpm", "spec": {"dpm": {"alpha_prior_rate": 0.5}}},
+    "ppmx_similarity": {"method": "ppmx", "spec": {"similarity": {"within_variance": 1.5}}}
+  }
+}

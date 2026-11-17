@@ -1,0 +1,22 @@
+{
+  "cases": [1, 2, 3, 4, 5, 6, 7],
+  "generating_groups": [10, 20, 50],
+  "intercept_variances": [0.5, 2.25],
+  "slope_variances": [0, 0.1],
+  "repetitions": 5,
+  "search": {
+    "min_leaf": 255,
+    "initial_candidates": 4,
+    "candidates_per_parent": 3,
+    "max_evaluations": 30,
+    "grow_evaluations": 22,
+    "fit_batch": 12,
+    "beam_width": 3,
+    "anneal_proposals": 60,
+    "anneal_temperature_fraction": 0.02,
+    "anneal_cooling": 0.96,
+    "anneal_move_probabilities": [0.55, 0.15, 0.30],
+    "em_tolerance": 0.00001,
+    "em_iterations": 300
+  }
+}
